@@ -1,0 +1,142 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['18.14.1', '20', '22']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - run: npm ci
+
+      - run: npm test
+
+      - run: node e2e.mjs
+
+  vendor-checksum:
+    name: vendor checksum (jsquash-webp)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # CHECKSUMS.sha256 pins the exact bytes of the vendored, unmodified
+      # @jsquash/webp v1.5.0 subset (comment lines starting with "#" are
+      # ignored by shasum). The web version (tools.first-ch.com) vendors the
+      # same v1.5.0 subset and verifies it independently in its own CI, so a
+      # silent drift between the two copies can't happen unnoticed.
+      - name: Verify vendor/jsquash-webp against CHECKSUMS.sha256
+        working-directory: vendor/jsquash-webp
+        run: shasum -a 256 -c CHECKSUMS.sha256
+
+  package-integrity:
+    name: package metadata & tarball integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - run: npm ci
+
+      - name: Verify published tarball contents
+        run: |
+          node <<'EOF'
+          const { execSync } = require('node:child_process');
+
+          const out = execSync('npm pack --dry-run --json', { encoding: 'utf8' });
+          const files = JSON.parse(out)[0].files.map((f) => f.path);
+
+          // Files that must ship in the npm tarball (server runtime + WebP
+          // codec binary + both codec license files, since BSD-3-Clause
+          // requires the notice/conditions/disclaimer to accompany binary
+          // redistribution).
+          const required = [
+            'server.mjs',
+            'lib.mjs',
+            'webp.mjs',
+            'package.json',
+            'vendor/jsquash-webp/codec/enc/webp_enc_simd.wasm',
+            'vendor/jsquash-webp/LICENSE',
+            'vendor/jsquash-webp/codec/LICENSE.codec.md',
+          ];
+          // Dev-only files that must NOT leak into the published package.
+          const forbidden = ['test.mjs', 'e2e.mjs'];
+
+          const missing = required.filter((f) => !files.includes(f));
+          const leaked = forbidden.filter((f) => files.includes(f));
+
+          if (missing.length || leaked.length) {
+            console.error('Tarball content check FAILED.');
+            if (missing.length) console.error(' missing required files:', missing);
+            if (leaked.length) console.error(' forbidden dev files present:', leaked);
+            console.error('Full file list:', files);
+            process.exit(1);
+          }
+
+          console.log('Tarball content check passed. Files:');
+          console.log(files.join('\n'));
+          EOF
+
+      - name: Verify version & mcpName consistency across metadata files
+        run: |
+          node <<'EOF'
+          const fs = require('node:fs');
+
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const server = JSON.parse(fs.readFileSync('server.json', 'utf8'));
+          const plugin = JSON.parse(
+            fs.readFileSync('plugins/firstch-tools/.claude-plugin/plugin.json', 'utf8'),
+          );
+          const mcpConfig = JSON.parse(
+            fs.readFileSync('plugins/firstch-tools/.mcp.json', 'utf8'),
+          );
+
+          const pkgVersion = pkg.version;
+          const npxArgs = mcpConfig.mcpServers?.['firstch-tools']?.args ?? [];
+          const npxArg = npxArgs.find((a) => a.startsWith('@first-ch/tools-mcp@'));
+          const npxVersion = npxArg ? npxArg.split('@').pop() : undefined;
+
+          const versions = {
+            'server.json#version': server.version,
+            'server.json#packages[0].version': server.packages?.[0]?.version,
+            'plugins/firstch-tools/.claude-plugin/plugin.json#version': plugin.version,
+            'plugins/firstch-tools/.mcp.json npx arg version': npxVersion,
+          };
+
+          const errors = [];
+          for (const [label, v] of Object.entries(versions)) {
+            if (v !== pkgVersion) {
+              errors.push(
+                `version mismatch: ${label} = ${JSON.stringify(v)}, expected ${JSON.stringify(pkgVersion)} (package.json#version)`,
+              );
+            }
+          }
+          if (pkg.mcpName !== server.name) {
+            errors.push(
+              `mcpName mismatch: package.json#mcpName = ${JSON.stringify(pkg.mcpName)}, server.json#name = ${JSON.stringify(server.name)}`,
+            );
+          }
+
+          if (errors.length) {
+            console.error('Metadata consistency check FAILED:');
+            for (const e of errors) console.error(' -', e);
+            process.exit(1);
+          }
+
+          console.log('Metadata consistency check passed. version =', pkgVersion, ' mcpName =', pkg.mcpName);
+          EOF

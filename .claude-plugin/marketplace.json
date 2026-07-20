@@ -1,0 +1,14 @@
+{
+  "name": "first-ch",
+  "description": "Free web tools from First CH LLC (tools.first-ch.com), packaged for AI agents.",
+  "owner": {
+    "name": "First CH LLC"
+  },
+  "plugins": [
+    {
+      "name": "firstch-tools",
+      "source": "./plugins/firstch-tools",
+      "description": "First CH Tools MCP server: WCAG contrast, JP char count, WebP convert, JSON-LD, llms.txt"
+    }
+  ]
+}

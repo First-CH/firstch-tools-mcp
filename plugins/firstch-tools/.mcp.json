@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "firstch-tools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@first-ch/tools-mcp@0.4.1"
+      ]
+    }
+  }
+}
