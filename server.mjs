@@ -6,7 +6,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { appendFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { contrastCheck, countChars, buildLlmsTxt, buildJsonLd } from './lib.mjs';
+import { contrastCheck, countChars, buildLlmsTxt, buildJsonLd, analyzeEncoding, convertEncoding } from './lib.mjs';
 import { convertToWebp } from './webp.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
@@ -169,6 +169,36 @@ server.registerTool(
   async (spec) => {
     await logUsage('llmstxt_generate');
     return asText({ text: buildLlmsTxt(spec) });
+  },
+);
+
+server.registerTool(
+  'encoding_convert',
+  {
+    title: '文字コード・改行コード変換',
+    description:
+      'CSV/テキストの文字コード（UTF-8 / Shift_JIS）・BOM有無・改行コード（CRLF/LF/CR）を判定し、UTF-8へ変換する。' +
+      '顧客から受け取ったCSVの文字化け調査、フォーム取り込みデータの前処理、' +
+      'リポジトリ内ファイルの改行コード事故（CRLFがLFに書き換わる等）の確認に使う。' +
+      'mode=analyze なら判定のみ、mode=convert なら変換後のテキストとbase64を返す。',
+    inputSchema: {
+      base64: z.string().describe('対象ファイルの内容（base64）。テキストを直接渡す場合は text を使う'),
+      text: z.string().optional().describe('base64の代わりにテキストを直接渡す場合（UTF-8として扱う）'),
+      mode: z.enum(['analyze', 'convert']).optional().describe('既定 analyze。convert で変換結果を返す'),
+      encoding: z.enum(['utf-8', 'shift_jis']).optional().describe('入力の文字コード。省略時は自動判定'),
+      newline: z.enum(['LF', 'CRLF', 'CR']).optional().describe('変換後の改行コード（mode=convert のとき）'),
+      bom: z.boolean().optional().describe('変換後にUTF-8 BOMを付けるか（既定 false）'),
+    },
+  },
+  async ({ base64, text, mode, encoding, newline, bom }) => {
+    await logUsage('encoding_convert');
+    if (!base64 && text === undefined) throw new Error('base64 か text のどちらかが必要です');
+    const bytes = base64
+      ? Uint8Array.from(Buffer.from(base64, 'base64'))
+      : new TextEncoder().encode(text);
+    if (mode === 'convert') return asText(convertEncoding(bytes, { encoding, newline, bom }));
+    const { text: _drop, ...info } = analyzeEncoding(bytes, encoding);
+    return asText(info);
   },
 );
 

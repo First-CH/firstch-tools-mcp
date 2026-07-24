@@ -1,7 +1,7 @@
 {
   "name": "@first-ch/tools-mcp",
-  "version": "0.4.1",
-  "description": "First CH Tools の計算ロジック（WCAGコントラスト比・文字数/Xウェイト・WebP変換・JSON-LD生成・llms.txt生成）をMCPツールとして提供するサーバー",
+  "version": "0.5.0",
+  "description": "First CH Tools の計算ロジック（WCAGコントラスト比・文字数/Xウェイト・WebP変換・JSON-LD生成・llms.txt生成・文字コード/改行コード変換）をMCPツールとして提供するサーバー",
   "type": "module",
   "bin": {
     "firstch-tools-mcp": "server.mjs"

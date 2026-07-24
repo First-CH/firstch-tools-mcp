@@ -49,6 +49,7 @@ This server is also registered in the [MCP Registry](https://registry.modelconte
 | `webp_convert` | Converts PNG/JPEG files (absolute paths) to WebP using the same libwebp WASM encoder (default quality 80) as the browser tool at tools.first-ch.com/webp/. Output defaults to the same directory as each input with a `.webp` extension | `paths[]` (absolute paths), `quality?` (1-100), `outputDir?` |
 | `jsonld_generate` | Generates schema.org JSON-LD for `organization` / `faqpage` / `service` / `breadcrumb`. Empty fields are omitted automatically. Returns both a `json` object and a ready-to-embed `<script>` snippet | `type`, plus the matching `organization` / `faq` / `service` / `breadcrumb` object |
 | `llmstxt_generate` | Generates an `llms.txt` file (per the llmstxt.org proposed format) summarizing a site for AI crawlers/agents | `siteName`, `summary?`, `notes?`, `sections?` |
+| `encoding_convert` | Detects the character encoding (UTF-8 / Shift_JIS), BOM and line endings (CRLF / LF / CR) of a file or text and converts it to UTF-8. Useful for diagnosing garbled Japanese CSVs and for normalising line endings. Output is UTF-8 only — encoding *to* Shift_JIS is not supported (no standard API, and a mapping table would be required). | `base64` or `text`, `mode` (`analyze` \| `convert`), `encoding`, `newline`, `bom` |
 
 See [`server.mjs`](./server.mjs) for the exact Zod input schemas.
 
@@ -136,6 +137,7 @@ claude mcp add firstch-tools -- npx -y @first-ch/tools-mcp
 | `webp_convert` | PNG/JPEG画像（絶対パス）をWebPへ変換する。tools.first-ch.com/webp/ と同一のlibwebp WASMエンコーダ（品質既定80）。出力先省略時は各入力と同じ場所に拡張子`.webp`で保存 | `paths[]`（絶対パス）・`quality?`（1-100）・`outputDir?` |
 | `jsonld_generate` | schema.org準拠のJSON-LDを生成する（`organization` / `faqpage` / `service` / `breadcrumb`）。空項目は自動で省略。`json`オブジェクトと埋め込み用`<script>`スニペットの両方を返す | `type` と対応する `organization` / `faq` / `service` / `breadcrumb` オブジェクト |
 | `llmstxt_generate` | AI検索・生成AI向けにサイト概要を伝える `llms.txt`（llmstxt.org提案フォーマット準拠）を生成する | `siteName`・`summary?`・`notes?`・`sections?` |
+| `encoding_convert` | ファイル/テキストの文字コード（UTF-8 / Shift_JIS）・BOM有無・改行コード（CRLF / LF / CR）を判定し、UTF-8へ変換する。日本語CSVの文字化け調査、改行コードの統一に。**出力はUTF-8のみ**（Shift_JISへのエンコードは標準APIに無く変換表が必要なため非対応） | `base64` または `text`、`mode`（`analyze` \| `convert`）、`encoding`、`newline`、`bom` |
 
 正確な入力スキーマ（Zod定義）は [`server.mjs`](./server.mjs) を参照してください。
 

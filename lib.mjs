@@ -158,3 +158,106 @@ export function buildJsonLd(type, fields = {}) {
   const snippet = `<script type="application/ld+json">\n${JSON.stringify(json, null, 2)}\n</script>`;
   return { json, snippet };
 }
+
+// ---- 文字コード・改行コード変換（site/encoding/app.js と同一アルゴリズム・2箇所ルール対象） ----
+// ブラウザ側は TextDecoder/TextEncoder、Node側は Buffer で同じ結果を返す。
+// Shift_JIS のエンコードは Node の標準APIに無いため、変換表を持たず「判定と UTF-8 化」までを担当する。
+
+const BOM_UTF8 = [0xef, 0xbb, 0xbf];
+
+/** 先頭バイトからBOMを判定する。戻り値: 'utf-8' | 'utf-16le' | 'utf-16be' | null */
+export function detectBom(bytes) {
+  const b = Array.from(bytes.slice(0, 3));
+  if (b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf) return 'utf-8';
+  if (b[0] === 0xff && b[1] === 0xfe) return 'utf-16le';
+  if (b[0] === 0xfe && b[1] === 0xff) return 'utf-16be';
+  return null;
+}
+
+/** 改行コードを数える。CRLF は CR+LF を1件として扱う */
+export function detectNewline(text) {
+  const crlf = (text.match(/\r\n/g) || []).length;
+  const lf = (text.match(/(?<!\r)\n/g) || []).length;
+  const cr = (text.match(/\r(?!\n)/g) || []).length;
+  const kinds = [
+    ['CRLF', crlf],
+    ['LF', lf],
+    ['CR', cr],
+  ].filter(([, n]) => n > 0);
+  return {
+    crlf,
+    lf,
+    cr,
+    dominant: kinds.length ? kinds.sort((a, b) => b[1] - a[1])[0][0] : 'none',
+    mixed: kinds.length > 1,
+  };
+}
+
+/** 改行コードを揃える。newline: 'LF' | 'CRLF' | 'CR' */
+export function convertNewline(text, newline) {
+  const lf = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  if (newline === 'CRLF') return lf.replace(/\n/g, '\r\n');
+  if (newline === 'CR') return lf.replace(/\n/g, '\r');
+  return lf;
+}
+
+/** UTF-8 かどうかを厳密に判定する（不正バイト列なら false） */
+export function isValidUtf8(bytes) {
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * バイト列を解析して文字コード・BOM・改行コードを返す。
+ * encoding は 'utf-8' | 'shift_jis' を明示できる。未指定なら UTF-8 として妥当かで自動判定する
+ * （日本語CSVは実務上ほぼ UTF-8 か Shift_JIS の二択のため、この2つに絞る）。
+ */
+export function analyzeEncoding(bytes, encoding) {
+  const arr = Uint8Array.from(bytes);
+  const bom = detectBom(arr);
+  const body = bom === 'utf-8' ? arr.slice(3) : arr;
+  const enc = encoding || (isValidUtf8(body) ? 'utf-8' : 'shift_jis');
+  let text = '';
+  let decodable = true;
+  try {
+    text = new TextDecoder(enc, { fatal: true }).decode(body);
+  } catch {
+    decodable = false;
+    text = new TextDecoder(enc).decode(body); // 置換文字込みで返す
+  }
+  return {
+    encoding: enc,
+    encoding_detected: !encoding,
+    bom: bom,
+    has_bom: bom !== null,
+    decodable,
+    newline: detectNewline(text),
+    bytes: arr.length,
+    chars: text.length,
+    text,
+  };
+}
+
+/**
+ * 変換して UTF-8 のバイト列を返す。
+ * opts: { encoding?, newline?: 'LF'|'CRLF'|'CR', bom?: boolean }
+ * Shift_JIS への書き出しは Node 標準では不可能なため、出力は UTF-8 固定にしている。
+ */
+export function convertEncoding(bytes, opts = {}) {
+  const info = analyzeEncoding(bytes, opts.encoding);
+  let text = info.text;
+  if (opts.newline) text = convertNewline(text, opts.newline);
+  const out = new TextEncoder().encode(text);
+  const withBom = opts.bom ? Uint8Array.from([...BOM_UTF8, ...out]) : out;
+  return {
+    from: { encoding: info.encoding, has_bom: info.has_bom, newline: info.newline.dominant },
+    to: { encoding: 'utf-8', has_bom: !!opts.bom, newline: opts.newline || info.newline.dominant },
+    bytes: withBom.length,
+    base64: Buffer.from(withBom).toString('base64'),
+    text,
+  };
+}

@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.First-CH/tools-mcp",
-  "description": "MCP tools: WCAG contrast, JP char/X-weight count, WebP convert, JSON-LD, llms.txt.",
-  "version": "0.4.1",
+  "description": "MCP tools: WCAG contrast, JP char/X-weight count, WebP convert, JSON-LD, llms.txt, encoding/line-ending convert.",
+  "version": "0.5.0",
   "repository": {
     "url": "https://github.com/First-CH/firstch-tools-mcp",
     "source": "github"
@@ -11,7 +11,7 @@
     {
       "registryType": "npm",
       "identifier": "@first-ch/tools-mcp",
-      "version": "0.4.1",
+      "version": "0.5.0",
       "transport": {
         "type": "stdio"
       },

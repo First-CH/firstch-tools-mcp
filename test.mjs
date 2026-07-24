@@ -1,6 +1,6 @@
 // lib.mjs の簡易テスト（既知の参照値と突合）
 import assert from 'node:assert/strict';
-import { contrastCheck, countChars } from './lib.mjs';
+import { contrastCheck, countChars, analyzeEncoding, convertEncoding, detectNewline, convertNewline } from './lib.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -101,6 +101,50 @@ assert.equal(over.x_postable, false);
   await writeFile(bad, Buffer.from('GIF89a'));
   await assert.rejects(() => convertToWebp(bad));
   await rm(bad);
+}
+
+// ---- 文字コード・改行コード（encoding_convert） ----
+{
+  const enc = new TextEncoder();
+
+  // 改行コードの判定（CRLFはCR+LFで1件）
+  const nl = detectNewline('a\r\nb\r\nc\n');
+  assert.equal(nl.crlf, 2);
+  assert.equal(nl.lf, 1);
+  assert.equal(nl.mixed, true);
+  assert.equal(nl.dominant, 'CRLF');
+
+  // 相互変換して元に戻ること
+  assert.equal(convertNewline('a\r\nb', 'LF'), 'a\nb');
+  assert.equal(convertNewline('a\nb', 'CRLF'), 'a\r\nb');
+  assert.equal(convertNewline(convertNewline('a\r\nb', 'LF'), 'CRLF'), 'a\r\nb');
+
+  // UTF-8 BOM の検出とBOM除去後の本文
+  const bom = Uint8Array.from([0xef, 0xbb, 0xbf, ...enc.encode('x\ny')]);
+  const a1 = analyzeEncoding(bom);
+  assert.equal(a1.bom, 'utf-8');
+  assert.equal(a1.has_bom, true);
+  assert.equal(a1.text, 'x\ny');
+
+  // Shift_JIS を自動判定できる（UTF-8として不正なバイト列）
+  const sjis = Uint8Array.from(Buffer.from('氏名', 'utf-8').length ? [0x8e, 0x81, 0x96, 0xbc] : []);
+  const a2 = analyzeEncoding(sjis);
+  assert.equal(a2.encoding, 'shift_jis');
+  assert.equal(a2.encoding_detected, true);
+  assert.equal(a2.text, '氏名');
+
+  // 変換: Shift_JIS+CRLF → UTF-8(BOM付き)+LF
+  const r = convertEncoding(sjis, { newline: 'LF', bom: true });
+  assert.equal(r.from.encoding, 'shift_jis');
+  assert.equal(r.to.encoding, 'utf-8');
+  assert.equal(r.to.has_bom, true);
+  const out = Buffer.from(r.base64, 'base64');
+  assert.deepEqual([...out.slice(0, 3)], [0xef, 0xbb, 0xbf]);
+  assert.equal(out.slice(3).toString('utf-8'), '氏名');
+
+  // 明示指定が自動判定より優先される
+  const a3 = analyzeEncoding(enc.encode('abc'), 'utf-8');
+  assert.equal(a3.encoding_detected, false);
 }
 
 console.log('all tests passed');
