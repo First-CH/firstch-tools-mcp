@@ -8,6 +8,7 @@ import { appendFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { contrastCheck, countChars, buildLlmsTxt, buildJsonLd, analyzeEncoding, convertEncoding } from './lib.mjs';
 import { convertToWebp } from './webp.mjs';
+import { renderMarp } from './marp.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -199,6 +200,52 @@ server.registerTool(
     if (mode === 'convert') return asText(convertEncoding(bytes, { encoding, newline, bom }));
     const { text: _drop, ...info } = analyzeEncoding(bytes, encoding);
     return asText(info);
+  },
+);
+
+server.registerTool(
+  'marp_render',
+  {
+    title: 'Marp Markdown→スライド レンダリング',
+    description:
+      'Marp Markdown をスライドへレンダリングし、HTML（テーマCSSをインラインした自己完結ファイル）や PDF を書き出す。' +
+      'AIが生成したスライド用Markdownをそのまま渡せば描画まで完結する（社内の marp ビルドの定型化・顧客配布資料の生成に使う）。' +
+      '和文テーマ firstch（firstch-design 準拠・紙/墨/朱・IBM Plex Sans JP）を同梱し、既定テーマにする。' +
+      'Markdown 側の Marp フロントマター（例: theme:/paginate:/size:/`<!-- _class: lead -->`）はそのまま効く。' +
+      'PDF はローカルの Chrome/Chromium を headless で呼び出して生成する（未検出なら HTML のみ返し理由を添える。' +
+      '環境変数 MARP_CHROME_PATH で実行ファイルを明示可）。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      markdown: z.string().optional().describe('Marp Markdown 本文（inputPath と排他・どちらか必須）'),
+      inputPath: z.string().optional().describe('Markdownファイルの絶対パス（markdown 未指定時に読み込む）'),
+      theme: z
+        .enum(['firstch', 'default', 'gaia', 'uncover'])
+        .optional()
+        .describe('既定テーマ（既定 firstch＝和文）。Markdown内の theme 指示が優先される'),
+      formats: z
+        .array(z.enum(['html', 'pdf']))
+        .optional()
+        .describe("出力フォーマット（既定 ['html']）。['html','pdf'] で両方"),
+      outputPath: z
+        .string()
+        .optional()
+        .describe('出力ファイルのベースパス（拡張子は自動。省略時は inputPath 準拠、無ければ一時ディレクトリ）'),
+      title: z.string().optional().describe('HTML の <title>（既定 "Marp slides"）'),
+    },
+  },
+  async ({ markdown, inputPath, theme, formats, outputPath, title }) => {
+    await logUsage('marp_render');
+    let md = markdown;
+    let outBase = outputPath;
+    let docTitle = title;
+    if ((md === undefined || md === '') && inputPath) {
+      const { readFile } = await import('node:fs/promises');
+      const { basename, extname } = await import('node:path');
+      md = await readFile(inputPath, 'utf8');
+      if (!outBase) outBase = inputPath; // 既定は入力と同じ場所・同名
+      if (!docTitle) docTitle = basename(inputPath, extname(inputPath));
+    }
+    if (md === undefined || md === '') throw new Error('markdown か inputPath のどちらかが必要です');
+    return asText(await renderMarp(md, { theme, formats, outputPath: outBase, title: docTitle }));
   },
 );
 

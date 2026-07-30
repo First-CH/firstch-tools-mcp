@@ -147,4 +147,53 @@ assert.equal(over.x_postable, false);
   assert.equal(a3.encoding_detected, false);
 }
 
+// ---- Marp レンダリング（marp_render） ----
+{
+  const { renderMarp, findChrome } = await import('./marp.mjs');
+  const { readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const md = `# タイトル\n\n本文\n\n---\n\n## 2枚目\n- 箇条書き\n`;
+  const base = join(tmpdir(), `firstch-marp-test-${process.pid}`);
+
+  // HTML: 自己完結ファイル・スライド数・既定テーマ firstch が効いていること
+  const r = await renderMarp(md, { outputPath: base, formats: ['html'] });
+  assert.equal(r.theme, 'firstch');
+  assert.equal(r.slides, 2);
+  assert.equal(r.outputs.html, `${base}.html`);
+  const html = await readFile(r.outputs.html, 'utf8');
+  assert.ok(html.includes('<!DOCTYPE html>'));
+  assert.equal((html.match(/<section id=/g) || []).length, 2);
+  assert.ok(html.includes('#faf8f4'), 'firstch テーマの紙色がインラインされている');
+  assert.ok(html.includes('@page'), '印刷用CSS(@page)がある');
+  await rm(r.outputs.html, { force: true });
+
+  // md 内の theme 指示が既定より優先される
+  const g = await renderMarp(`<!-- theme: gaia -->\n# G`, { outputPath: base, formats: ['html'] });
+  const ghtml = await readFile(g.outputs.html, 'utf8');
+  assert.ok(!ghtml.includes('#faf8f4'), 'gaia 指示で firstch は適用されない');
+  await rm(g.outputs.html, { force: true });
+
+  // 空入力・未対応テーマ・未対応formatはthrow
+  await assert.rejects(() => renderMarp(''));
+  await assert.rejects(() => renderMarp('# x', { theme: 'zzz' }));
+  await assert.rejects(() => renderMarp('# x', { formats: ['docx'] }));
+
+  // PDF: Chrome があれば実際に生成して2ページ、無ければ pdf_skipped を返す
+  const chrome = findChrome();
+  const p = await renderMarp(md, { outputPath: base, formats: ['html', 'pdf'] });
+  if (chrome) {
+    assert.equal(p.outputs.pdf, `${base}.pdf`);
+    const pdf = await readFile(p.outputs.pdf);
+    assert.equal(pdf.slice(0, 5).toString(), '%PDF-', 'PDFシグネチャ');
+    const count = (pdf.toString('latin1').match(/\/Type\s*\/Pages[^s].*?\/Count\s+(\d+)/s) || [])[1];
+    assert.equal(count, '2', `PDFは2ページ（実際: ${count}）`);
+    await rm(p.outputs.pdf, { force: true });
+  } else {
+    assert.ok(p.pdf_skipped, 'Chrome 未検出時は pdf_skipped を返す');
+  }
+  await rm(p.outputs.html, { force: true });
+}
+
 console.log('all tests passed');

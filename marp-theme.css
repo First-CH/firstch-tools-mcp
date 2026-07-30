@@ -1,0 +1,43 @@
+/* @theme firstch */
+/*
+ * First CH Tools — 和文スライドテーマ（firstch-design 準拠）
+ * トークン: 紙 #faf8f4 / 墨 #23282e / 朱 #c8501f / hairline #e2dccf
+ * フォント: IBM Plex Sans JP / IBM Plex Mono（未インストール環境では和文システムフォントへフォールバック）
+ * 影・角丸の羅列を避け、hairline 罫線＋余白でグルーピングする方針。
+ */
+@import 'default';
+
+section {
+  --fch-paper: #faf8f4;
+  --fch-ink: #23282e;
+  --fch-accent: #c8501f;
+  --fch-hairline: #e2dccf;
+  font-family: "IBM Plex Sans JP", "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif;
+  background: var(--fch-paper);
+  color: var(--fch-ink);
+  font-size: 28px;
+  line-height: 1.75;
+  letter-spacing: .02em;
+  padding: 72px 84px;
+}
+h1, h2, h3, h4 { color: var(--fch-ink); font-weight: 700; line-height: 1.35; }
+h1 { font-size: 1.9em; border-bottom: 3px solid var(--fch-accent); padding-bottom: .28em; margin-bottom: .5em; }
+h2 { font-size: 1.4em; border-bottom: 1px solid var(--fch-hairline); padding-bottom: .24em; }
+h3 { font-size: 1.15em; }
+a, strong { color: var(--fch-accent); }
+ul, ol { padding-left: 1.1em; }
+li { margin: .2em 0; }
+blockquote { border-left: 4px solid var(--fch-accent); color: #5a5f66; padding-left: .8em; }
+code { font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace; }
+pre { background: #23282e; border: 1px solid var(--fch-hairline); border-radius: 4px; }
+pre code { color: #f3efe6; }
+table { border-collapse: collapse; }
+th, td { border: 1px solid var(--fch-hairline); padding: .3em .7em; }
+th { background: #f0ebe0; }
+
+/* タイトル/リードスライド: <!-- _class: lead --> */
+section.lead { justify-content: center; text-align: center; }
+section.lead h1, section.lead h2 { border-bottom: none; }
+
+/* ページ番号（paginate: true のとき） */
+section::after { color: #a89f8c; font-size: .5em; }
