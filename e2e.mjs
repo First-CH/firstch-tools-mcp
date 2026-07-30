@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 5 registered tools, and `tools/call` actually executes handlers
+// returns all 7 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
@@ -55,7 +55,15 @@ try {
 
   const listRes = await request('tools/list', {}, 2);
   const names = (listRes.result?.tools || []).map((t) => t.name).sort();
-  const expected = ['contrast_check', 'count_chars', 'jsonld_generate', 'llmstxt_generate', 'webp_convert'];
+  const expected = [
+    'contrast_check',
+    'count_chars',
+    'encoding_convert',
+    'jsonld_generate',
+    'llmstxt_generate',
+    'testdata_generate',
+    'webp_convert',
+  ];
   assert.deepEqual(names, expected, `unexpected tool list: ${JSON.stringify(names)}`);
 
   // tools/call: actually invoke a couple of handlers so a change that makes every
@@ -75,6 +83,18 @@ try {
   const chars = await callTool('count_chars', { text: 'あいうえおかきくけこ' }, 4);
   assert.equal(chars.x_weight, 20, `count_chars x_weight mismatch: ${JSON.stringify(chars)}`);
   assert.equal(chars.total, 10, `count_chars total mismatch: ${JSON.stringify(chars)}`);
+
+  // seed を固定すれば出力は完全に再現される（id列だけなら生成辞書に依存しない）
+  const td = await callTool('testdata_generate', { rows: 2, seed: 'e2e', fields: ['id'], format: 'csv' }, 5);
+  assert.equal(td.text, 'id\n1\n2\n', `testdata_generate text mismatch: ${JSON.stringify(td)}`);
+  assert.equal(td.seed, 'e2e', `testdata_generate seed mismatch: ${JSON.stringify(td)}`);
+
+  const boundary = await callTool('testdata_generate', { mode: 'text', preset: 'digit', length: 3 }, 6);
+  assert.deepEqual(
+    boundary.variants.map((v) => v.text),
+    ['01', '012', '0123'],
+    `testdata_generate boundary text mismatch: ${JSON.stringify(boundary)}`,
+  );
 
   console.log('e2e ok:', names.join(', '));
   child.kill();
