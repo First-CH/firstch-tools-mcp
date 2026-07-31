@@ -96,6 +96,15 @@ try {
     `testdata_generate boundary text mismatch: ${JSON.stringify(boundary)}`,
   );
 
+
+  // format=xlsx は base64 で .xlsx 本体を返す（MCP経由でもバイナリが壊れないこと）
+  const xl = await callTool('testdata_generate', { rows: 2, seed: 'e2e', fields: ['id', 'name'], format: 'xlsx' }, 7);
+  assert.equal(xl.format, 'xlsx', `testdata_generate format mismatch: ${JSON.stringify(xl)}`);
+  const xlBytes = Buffer.from(xl.base64, 'base64');
+  assert.equal(xlBytes.length, xl.bytes, 'xlsx byte count mismatch');
+  assert.deepEqual([...xlBytes.subarray(0, 2)], [0x50, 0x4b], 'xlsx is not a ZIP');
+  assert.ok(xlBytes.includes(Buffer.from('xl/worksheets/sheet1.xml')), 'xlsx is missing the worksheet part');
+
   console.log('e2e ok:', names.join(', '));
   child.kill();
   process.exit(0);

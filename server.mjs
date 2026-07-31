@@ -206,11 +206,12 @@ server.registerTool(
 server.registerTool(
   'testdata_generate',
   {
-    title: 'テストデータ生成（ダミーCSV/JSON・境界値テキスト）',
+    title: 'テストデータ生成（ダミーCSV/JSON/Excel・境界値テキスト）',
     description:
       'フォーム入力テスト・CSV取り込みテスト用のダミーデータを生成する。' +
-      'mode=records（既定）は氏名・フリガナ・住所・郵便番号・メール・電話番号などをCSV/TSV/JSONで返し、' +
+      'mode=records（既定）は氏名・フリガナ・住所・郵便番号・メール・電話番号などをCSV/TSV/JSON/XLSXで返し、' +
       '文字コード（UTF-8 / Shift_JIS）・BOM・改行コード（LF/CRLF）を指定できる。' +
+      'format=xlsx は Excel の .xlsx ファイル（バイナリ）を base64 で返す。outputPath を併せて渡すとファイルに書き出せる。' +
       'mode=text は maxlength の境界値テスト用に、指定文字種で n-1 / n / n+1 文字ちょうどの文字列を返す。' +
       '生成データはすべて架空（メールは RFC 2606 の example.com 系）。seed を渡すと同じデータを再現できる。',
     inputSchema: {
@@ -220,16 +221,16 @@ server.registerTool(
         .array(z.enum(FIELDS))
         .optional()
         .describe(`出力する列（既定: ${DEFAULT_FIELDS.join(',')}）。locale=en では name_kana / name_romaji は空になる`),
-      format: z.enum(['csv', 'tsv', 'json']).optional().describe('出力形式（既定 csv）'),
+      format: z.enum(['csv', 'tsv', 'json', 'xlsx']).optional().describe('出力形式（既定 csv）。xlsx は Excel ファイルを base64 で返す'),
       locale: z.enum(['ja', 'en']).optional().describe('データの言語（既定 ja。氏名・住所・電話番号の体系が変わる）'),
-      encoding: z.enum(['utf-8', 'shift_jis']).optional().describe('文字コード（既定 utf-8）。shift_jis のときは base64 も返す'),
-      newline: z.enum(['LF', 'CRLF']).optional().describe('改行コード（既定 LF）'),
-      bom: z.boolean().optional().describe('UTF-8 BOMを付けるか（既定 false・Excelで開くCSV向け）'),
-      header: z.boolean().optional().describe('ヘッダー行を付けるか（既定 true・csv/tsvのみ）'),
+      encoding: z.enum(['utf-8', 'shift_jis']).optional().describe('文字コード（既定 utf-8）。shift_jis のときは base64 も返す。xlsx では無視される'),
+      newline: z.enum(['LF', 'CRLF']).optional().describe('改行コード（既定 LF）。xlsx では無視される'),
+      bom: z.boolean().optional().describe('UTF-8 BOMを付けるか（既定 false・Excelで開くCSV向け）。xlsx では無視される'),
+      header: z.boolean().optional().describe('ヘッダー行を付けるか（既定 true・csv/tsv/xlsxのみ）'),
       seed: z.string().optional().describe('乱数シード。同じ値なら常に同じデータを生成する（省略時はランダム）'),
       preset: z.enum(PRESETS).optional().describe('mode=text の文字種（既定 mixed）'),
       length: z.number().int().min(1).max(10000).optional().describe('mode=text の文字数N（既定20・最大10000）'),
-      outputPath: z.string().optional().describe('指定するとその絶対パスへファイルとして書き出す（mode=records のみ）'),
+      outputPath: z.string().optional().describe('指定するとその絶対パスへファイルとして書き出す（mode=records のみ・format=xlsx では実質必須）'),
     },
   },
   async (opts) => {
@@ -238,6 +239,8 @@ server.registerTool(
     if (opts.outputPath && result.mode === 'records') {
       await writeFile(opts.outputPath, _bytes);
       result.output = opts.outputPath;
+      // ファイルに書けたなら base64 は重複した重い情報でしかない
+      delete result.base64;
     }
     return asText(result);
   },

@@ -246,6 +246,168 @@ function serialize(records, fields, opts) {
   return lines.join(nl) + nl;
 }
 
+/* ---- .xlsx 書き出し（OOXML SpreadsheetML）----
+ * .xlsx の実体は XML を集めた ZIP なので、無圧縮(store)のZIPライターを自前で持てば
+ * 外部ライブラリ（SheetJS等）を読み込まずにブラウザ内・Node内のどちらでも書き出せる。
+ * タイムスタンプは固定値にしてあるため、同じ seed からは常に同じバイト列になる。 */
+
+/** XMLのテキストノードに置ける形にする。XML 1.0 に存在できない制御文字は落とす
+ *  （該当文字が1つでも残るとExcelはファイルを「破損」と判定して開かない） */
+function xmlText(v) {
+  return String(v == null ? '' : v)
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+let CRC_TABLE = null;
+
+function crcTable() {
+  if (CRC_TABLE) return CRC_TABLE;
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[i] = c >>> 0;
+  }
+  CRC_TABLE = t;
+  return t;
+}
+
+function crc32(bytes) {
+  const t = crcTable();
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = t[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/** entries: [{ name, bytes }] を無圧縮(store)のZIPにまとめる */
+function zipStore(entries) {
+  const files = entries.map((e) => ({
+    name: new TextEncoder().encode(e.name),
+    bytes: e.bytes,
+    crc: crc32(e.bytes),
+  }));
+  // ローカルヘッダ30 + 中央ディレクトリ46 + ファイル名2回 + 本体、最後にEOCD22
+  let total = 22;
+  for (const f of files) total += 30 + 46 + f.name.length * 2 + f.bytes.length;
+  const buf = new Uint8Array(total);
+  const view = new DataView(buf.buffer);
+  let p = 0;
+  const u16 = (v) => { view.setUint16(p, v, true); p += 2; };
+  const u32 = (v) => { view.setUint32(p, v, true); p += 4; };
+  const raw = (b) => { buf.set(b, p); p += b.length; };
+  const DOS_DATE = 0x0021; // 1980-01-01（固定＝同じ入力からは常に同じファイルになる）
+
+  const offsets = [];
+  for (const f of files) {
+    offsets.push(p);
+    u32(0x04034b50); u16(20); u16(0); u16(0); u16(0); u16(DOS_DATE);
+    u32(f.crc); u32(f.bytes.length); u32(f.bytes.length);
+    u16(f.name.length); u16(0);
+    raw(f.name); raw(f.bytes);
+  }
+  const dirStart = p;
+  files.forEach((f, i) => {
+    u32(0x02014b50); u16(20); u16(20); u16(0); u16(0); u16(0); u16(DOS_DATE);
+    u32(f.crc); u32(f.bytes.length); u32(f.bytes.length);
+    u16(f.name.length); u16(0); u16(0); u16(0); u16(0); u32(0); u32(offsets[i]);
+    raw(f.name);
+  });
+  const dirSize = p - dirStart; // EOCDを書く前に確定させる（書きながら p が進むため）
+  u32(0x06054b50); u16(0); u16(0); u16(files.length); u16(files.length);
+  u32(dirSize); u32(dirStart); u16(0);
+  return buf;
+}
+
+/** 0 → A, 25 → Z, 26 → AA */
+function colName(i) {
+  let s = '';
+  for (let n = i; n >= 0; n = Math.floor(n / 26) - 1) s = String.fromCharCode(65 + (n % 26)) + s;
+  return s;
+}
+
+// 列幅（文字数目安）。既定の幅のままだと住所・自由記述が潰れて中身を確認できない
+const XLSX_WIDTHS = {
+  id: 6, name: 15, name_kana: 17, name_romaji: 19, gender: 8, birthday: 13, email: 30,
+  tel: 17, zip: 11, address: 44, company: 26, department: 18, url: 34, text: 48,
+};
+
+const XML_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+const NS_SHEET = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+const NS_REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const NS_PKG_REL = 'http://schemas.openxmlformats.org/package/2006/relationships';
+
+/**
+ * レコードを .xlsx のバイト列にする。
+ * 連番(id)だけ数値セルにし、それ以外は文字列セルにする。郵便番号を数値にすると
+ * Excelが先頭の0を落として 02108 → 2108 になるため、文字列で固定する。
+ */
+function buildXlsx(records, fields, opts = {}) {
+  const cols = fields.filter((f) => FIELDS.includes(f));
+  const header = opts.header !== false;
+  const rows = [];
+  let n = 0;
+
+  if (header) {
+    n += 1;
+    rows.push(`<row r="${n}">${cols
+      .map((f, i) => `<c r="${colName(i)}${n}" s="1" t="inlineStr"><is><t xml:space="preserve">${xmlText(f)}</t></is></c>`)
+      .join('')}</row>`);
+  }
+  for (const rec of records) {
+    n += 1;
+    const cells = cols.map((f, i) => {
+      const v = rec[f];
+      if (v === '' || v == null) return ''; // 空セルは書かない（疎な行はSpreadsheetMLとして正しい）
+      const ref = `${colName(i)}${n}`;
+      if (f === 'id') return `<c r="${ref}"><v>${xmlText(v)}</v></c>`;
+      return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${xmlText(v)}</t></is></c>`;
+    });
+    rows.push(`<row r="${n}">${cells.join('')}</row>`);
+  }
+
+  const widths = cols
+    .map((f, i) => `<col min="${i + 1}" max="${i + 1}" width="${XLSX_WIDTHS[f] || 14}" customWidth="1"/>`)
+    .join('');
+  // ヘッダー行があるときだけ先頭行を固定する
+  const pane = header ? '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' : '';
+
+  const sheet = `${XML_HEAD}<worksheet xmlns="${NS_SHEET}">`
+    + `<dimension ref="A1:${colName(cols.length - 1)}${n}"/>`
+    + `<sheetViews><sheetView workbookViewId="0">${pane}</sheetView></sheetViews>`
+    + `<sheetFormatPr defaultRowHeight="18"/><cols>${widths}</cols>`
+    + `<sheetData>${rows.join('')}</sheetData></worksheet>`;
+
+  // ヘッダー行を太字にするための最小スタイル（s="1" が太字）
+  const styles = `${XML_HEAD}<styleSheet xmlns="${NS_SHEET}">`
+    + '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
+    + '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
+    + '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+    + '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+    + '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+    + '<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>'
+    + '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+
+  const contentTypes = `${XML_HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
+    + '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+    + '<Default Extension="xml" ContentType="application/xml"/>'
+    + '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+    + '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+    + '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>';
+
+  const enc = new TextEncoder();
+  return zipStore([
+    { name: '[Content_Types].xml', bytes: enc.encode(contentTypes) },
+    { name: '_rels/.rels', bytes: enc.encode(`${XML_HEAD}<Relationships xmlns="${NS_PKG_REL}"><Relationship Id="rId1" Type="${NS_REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>`) },
+    { name: 'xl/workbook.xml', bytes: enc.encode(`${XML_HEAD}<workbook xmlns="${NS_SHEET}" xmlns:r="${NS_REL}"><sheets><sheet name="testdata" sheetId="1" r:id="rId1"/></sheets></workbook>`) },
+    { name: 'xl/_rels/workbook.xml.rels', bytes: enc.encode(`${XML_HEAD}<Relationships xmlns="${NS_PKG_REL}"><Relationship Id="rId1" Type="${NS_REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="${NS_REL}/styles" Target="styles.xml"/></Relationships>`) },
+    { name: 'xl/styles.xml', bytes: enc.encode(styles) },
+    { name: 'xl/worksheets/sheet1.xml', bytes: enc.encode(sheet) },
+  ]);
+}
+
 /* ---- Shift_JIS エンコード ----
  * TextEncoder は UTF-8 しか書き出せないため、TextDecoder('shift_jis') で
  * 全バイト列を1回だけ復号して逆引き表を作る（変換表を同梱せずCP932相当を得る）。 */
@@ -376,7 +538,7 @@ function generateBoundaryText(preset, n) {
 const PRESETS = Object.keys(CHARSETS);
 
 /**
- * mode: 'records'（既定）… ダミーレコードを CSV/TSV/JSON で返す
+ * mode: 'records'（既定）… ダミーレコードを CSV/TSV/JSON/XLSX で返す
  * mode: 'text'          … 指定文字種で n-1 / n / n+1 文字ちょうどの文字列を返す
  */
 export function generateTestData(opts = {}) {
@@ -389,13 +551,37 @@ export function generateTestData(opts = {}) {
   const fields = (opts.fields && opts.fields.length ? opts.fields : DEFAULT_FIELDS).filter((f) => FIELDS.includes(f));
   if (!fields.length) throw new Error(`fields が不正です（${FIELDS.join(' / ')} から選ぶ）`);
   const format = opts.format || 'csv';
-  if (!['csv', 'tsv', 'json'].includes(format)) throw new Error(`未対応の形式: ${format}（csv / tsv / json のいずれか）`);
+  if (!['csv', 'tsv', 'json', 'xlsx'].includes(format)) throw new Error(`未対応の形式: ${format}（csv / tsv / json / xlsx のいずれか）`);
   const encoding = opts.encoding || 'utf-8';
   if (!['utf-8', 'shift_jis'].includes(encoding)) throw new Error(`未対応の文字コード: ${encoding}（utf-8 / shift_jis のいずれか）`);
   const newline = opts.newline || 'LF';
   const header = opts.header !== false;
 
   const r = generateRecords({ rows: opts.rows ?? 10, locale: opts.locale, seed: opts.seed });
+
+  // xlsx はZIP+XMLのバイナリなので、文字コード・改行コード・BOMの指定は対象外。
+  // text には中身を確認できるようタブ区切りの表現を入れる（そのままExcelに貼れる）
+  if (format === 'xlsx') {
+    const bytes = buildXlsx(r.records, fields, { header });
+    return {
+      mode: 'records',
+      rows: r.rows,
+      locale: r.locale,
+      seed: r.seed,
+      fields,
+      format,
+      encoding: 'utf-8', // xlsx内部のXMLは常にUTF-8
+      has_bom: false,
+      newline: 'LF',
+      bytes: bytes.length,
+      unencodable: 0,
+      note: 'xlsx はバイナリのため encoding / newline / bom の指定は無視される。text はタブ区切りのプレビューで、ファイル本体は base64（または outputPath）で受け取る。',
+      text: serialize(r.records, fields, { format: 'tsv', newline: 'LF', header }),
+      base64: Buffer.from(bytes).toString('base64'),
+      _bytes: bytes,
+    };
+  }
+
   const text = serialize(r.records, fields, { format, newline, header });
   // Shift_JIS に BOM は無いため、指定されても付けない
   const enc = encodeText(text, { encoding, bom: encoding === 'utf-8' && !!opts.bom });
@@ -419,4 +605,4 @@ export function generateTestData(opts = {}) {
   };
 }
 
-export { FIELDS, DEFAULT_FIELDS, CHARSETS, PRESETS, generateRecords, serialize, encodeText, generateBoundaryText, textStats, sjisEncode };
+export { FIELDS, DEFAULT_FIELDS, CHARSETS, PRESETS, generateRecords, serialize, buildXlsx, encodeText, generateBoundaryText, textStats, sjisEncode };

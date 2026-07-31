@@ -237,13 +237,109 @@ assert.equal(over.x_postable, false);
   assert.equal(sp.at(-1), '　');
 
   // 不正な入力は throw
-  assert.throws(() => generateTestData({ format: 'xlsx' }));
+  assert.throws(() => generateTestData({ format: 'xls' }));
   assert.throws(() => generateTestData({ encoding: 'euc-jp' }));
   assert.throws(() => generateTestData({ fields: ['password'] }));
   assert.throws(() => generateTestData({ mode: 'text', preset: 'klingon' }));
   // 行数は上限1000に丸められる
   assert.equal(generateTestData({ rows: 99999, fields: ['id'], seed: 'x' }).rows, 1000);
   assert.equal(FIELDS.length, 14);
+}
+
+
+// ---- .xlsx 書き出し（testdata_generate format=xlsx） ----
+{
+  const { generateTestData, buildXlsx, generateRecords, FIELDS } = await import('./testdata.mjs');
+  const { crc32 } = await import('node:zlib');
+
+  /** 無圧縮ZIPを読み、CRCを検証しつつ { 名前: 中身 } を返す（自前ライターの逆操作） */
+  const unzip = (buf) => {
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    let eocd = buf.length - 22;
+    while (eocd >= 0 && dv.getUint32(eocd, true) !== 0x06054b50) eocd -= 1;
+    assert.ok(eocd >= 0, 'EOCDが見つからない');
+    const count = dv.getUint16(eocd + 10, true);
+    const dirSize = dv.getUint32(eocd + 12, true);
+    const dirOff = dv.getUint32(eocd + 16, true);
+    assert.equal(dirOff + dirSize + 22, buf.length, 'EOCDのサイズ/オフセットが実体と一致する');
+    const out = {};
+    let p = dirOff;
+    for (let i = 0; i < count; i++) {
+      assert.equal(dv.getUint32(p, true), 0x02014b50, '中央ディレクトリのシグネチャ');
+      const crc = dv.getUint32(p + 16, true);
+      const size = dv.getUint32(p + 24, true);
+      const nameLen = dv.getUint16(p + 28, true);
+      const local = dv.getUint32(p + 42, true);
+      const name = new TextDecoder().decode(buf.subarray(p + 46, p + 46 + nameLen));
+      assert.equal(dv.getUint32(local, true), 0x04034b50, 'ローカルヘッダのシグネチャ');
+      assert.equal(dv.getUint16(local + 8, true), 0, '無圧縮(store)で格納されている');
+      const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
+      const body = buf.subarray(start, start + size);
+      assert.equal(crc32(body), crc, `CRC不一致: ${name}`);
+      out[name] = new TextDecoder().decode(body);
+      p += 46 + nameLen + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
+    }
+    return out;
+  };
+
+  const x = generateTestData({ rows: 5, seed: 'test-2026', format: 'xlsx' });
+  assert.equal(x.format, 'xlsx');
+  assert.equal(x.encoding, 'utf-8');
+  assert.equal(x.has_bom, false);
+  assert.ok(x.base64, 'xlsx は base64 でファイル本体を返す');
+  const bytes = Buffer.from(x.base64, 'base64');
+  assert.equal(bytes.length, x.bytes);
+  assert.deepEqual([...bytes.subarray(0, 4)], [0x50, 0x4b, 0x03, 0x04], 'ZIPのシグネチャ PK');
+  assert.ok(x.text.includes('\t'), 'text はタブ区切りのプレビュー');
+
+  const parts = unzip(new Uint8Array(bytes));
+  assert.deepEqual(Object.keys(parts).sort(), [
+    '[Content_Types].xml', '_rels/.rels', 'xl/_rels/workbook.xml.rels',
+    'xl/styles.xml', 'xl/workbook.xml', 'xl/worksheets/sheet1.xml',
+  ]);
+  const sheet = parts['xl/worksheets/sheet1.xml'];
+  assert.match(sheet, /<sheetData>/);
+  assert.match(sheet, /state="frozen"/, 'ヘッダー行があるときは先頭行を固定する');
+  assert.match(sheet, /<dimension ref="A1:G6"\/>/, '既定7列 + ヘッダー1行 + 5行');
+  assert.match(sheet, /<c r="A2"><v>1<\/v><\/c>/, '連番は数値セル');
+  assert.match(sheet, /<c r="F2" t="inlineStr"><is><t xml:space="preserve">\d{3}-\d{4}<\/t>/, '郵便番号は文字列セル（先頭ゼロが消えない）');
+  assert.match(parts['xl/workbook.xml'], /name="testdata"/);
+
+  // 同じ seed なら .xlsx もバイト単位で同一（タイムスタンプ固定）
+  assert.ok(Buffer.from(generateTestData({ rows: 5, seed: 'test-2026', format: 'xlsx' }).base64, 'base64').equals(bytes));
+
+  // header:false ではヘッダー行も固定枠も無い
+  const noHdr = unzip(buildXlsx(generateRecords({ rows: 3, seed: 'h' }).records, ['id', 'name'], { header: false }));
+  const noHdrSheet = noHdr['xl/worksheets/sheet1.xml'];
+  assert.doesNotMatch(noHdrSheet, /state="frozen"/);
+  assert.doesNotMatch(noHdrSheet, /<t xml:space="preserve">name<\/t>/);
+  assert.match(noHdrSheet, /<dimension ref="A1:B3"\/>/);
+
+  // XMLエスケープと、XML 1.0 に置けない制御文字の除去
+  const esc = unzip(buildXlsx(
+    [{ id: '1', name: 'a&b<c>d"e', text: 'x\u0001y\u0002z' }],
+    ['id', 'name', 'text'],
+    { header: false },
+  ))['xl/worksheets/sheet1.xml'];
+  assert.match(esc, /<t xml:space="preserve">a&amp;b&lt;c&gt;d"e<\/t>/);
+  assert.match(esc, /<t xml:space="preserve">xyz<\/t>/, '制御文字は落とす（残るとExcelが破損扱いする）');
+
+  // 空文字の列はセルごと省略される（en ロケールのフリガナなど）
+  const sparse = unzip(buildXlsx([{ id: '1', name: 'A', name_kana: '' }], ['id', 'name', 'name_kana'], { header: false }))['xl/worksheets/sheet1.xml'];
+  assert.doesNotMatch(sparse, /r="C1"/);
+
+  // xlsx では encoding / newline / bom の指定が無視される
+  const ignored = generateTestData({ rows: 2, seed: 'q', format: 'xlsx', encoding: 'shift_jis', newline: 'CRLF', bom: true });
+  assert.equal(ignored.encoding, 'utf-8');
+  assert.equal(ignored.newline, 'LF');
+  assert.equal(ignored.has_bom, false);
+  assert.equal(ignored.unencodable, 0);
+  assert.ok(ignored.note.includes('xlsx'));
+
+  // 1000行 × 全14列でも壊れない
+  const big = generateTestData({ rows: 1000, seed: 'big', format: 'xlsx', fields: FIELDS });
+  const bigSheet = unzip(new Uint8Array(Buffer.from(big.base64, 'base64')))['xl/worksheets/sheet1.xml'];
+  assert.match(bigSheet, /<dimension ref="A1:N1001"\/>/);
 }
 
 console.log('all tests passed');
