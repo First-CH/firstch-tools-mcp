@@ -1,9 +1,17 @@
-/* @theme firstch */
-/*
+/*!
  * First CH Tools — 和文スライドテーマ（firstch-design 準拠）
  * トークン: 紙 #faf8f4 / 墨 #23282e / 朱 #c8501f / hairline #e2dccf
  * フォント: IBM Plex Sans JP / IBM Plex Mono（未インストール環境では和文システムフォントへフォールバック）
  * 影・角丸の羅列を避け、hairline 罫線＋余白でグルーピングする方針。
+ *
+ * メタデータ（@auto-scaling / @size）は @import では継承されないため、default テーマと
+ * 同じものをここで宣言し直している。これが無いと `<!-- fit -->` の見出し自動縮小と
+ * `size: 4:3` 指示が効かない。
+ *
+ * @theme firstch
+ * @auto-scaling true
+ * @size 16:9 1280px 720px
+ * @size 4:3 960px 720px
  */
 @import 'default';
 

@@ -56,11 +56,19 @@ export function findChrome() {
   return candidates.find((p) => existsSync(p)) || null;
 }
 
-// レンダリング済みテーマCSSからスライド1枚の寸法（px）を取り出す。
-// size 指示（4:3 等）にも追従する。取れなければ 16:9 の既定にフォールバック。
-function slideSize(css) {
-  const m = css.match(/section\s*\{[^}]*?width:\s*(\d+)px;\s*height:\s*(\d+)px/);
-  return m ? { w: Number(m[1]), h: Number(m[2]) } : { w: 1280, h: 720 };
+// スライド1枚の寸法（px）を取り出す。size 指示（4:3 等）にも追従する。
+// 出力SVGの viewBox が実寸の正本。CSSから読むと、テーマ本体の `section{width:1280px…}` と
+// size指示による上書き `section{width:960px;height:720px}` の2つが出るため先勝ちだと誤る。
+// （site側 site/marp/app.js の slideSize と同じ処理・site側が正本）
+function slideSize(html, css) {
+  const vb = html.match(/viewBox="0 0 ([\d.]+) ([\d.]+)"/);
+  if (vb) return { w: Math.round(Number(vb[1])), h: Math.round(Number(vb[2])) };
+  const rules = css.match(/section\s*\{[^}]*?width:\s*(\d+)px;\s*height:\s*(\d+)px/g);
+  if (rules && rules.length) {
+    const last = rules[rules.length - 1].match(/width:\s*(\d+)px;\s*height:\s*(\d+)px/);
+    return { w: Number(last[1]), h: Number(last[2]) };
+  }
+  return { w: 1280, h: 720 };
 }
 
 function buildHtmlDoc({ html, css, size, title }) {
@@ -164,7 +172,7 @@ export async function renderMarp(markdown, opts = {}) {
   const { html, css } = marp.render(markdown);
 
   const slides = (html.match(/<section id=/g) || []).length;
-  const size = slideSize(css);
+  const size = slideSize(html, css);
   const doc = buildHtmlDoc({ html, css, size, title });
 
   const outputs = {};
