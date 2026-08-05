@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 5 registered tools, and `tools/call` actually executes handlers
-// (contrast_check / count_chars) and returns the expected values — this catches
+// returns all registered tools, and `tools/call` actually executes handlers
+// (contrast_check / count_chars / marp_render) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -55,7 +55,10 @@ try {
 
   const listRes = await request('tools/list', {}, 2);
   const names = (listRes.result?.tools || []).map((t) => t.name).sort();
-  const expected = ['contrast_check', 'count_chars', 'jsonld_generate', 'llmstxt_generate', 'webp_convert'];
+  const expected = [
+    'contrast_check', 'count_chars', 'encoding_convert', 'jsonld_generate',
+    'llmstxt_generate', 'marp_render', 'webp_convert',
+  ];
   assert.deepEqual(names, expected, `unexpected tool list: ${JSON.stringify(names)}`);
 
   // tools/call: actually invoke a couple of handlers so a change that makes every
@@ -75,6 +78,21 @@ try {
   const chars = await callTool('count_chars', { text: 'あいうえおかきくけこ' }, 4);
   assert.equal(chars.x_weight, 20, `count_chars x_weight mismatch: ${JSON.stringify(chars)}`);
   assert.equal(chars.total, 10, `count_chars total mismatch: ${JSON.stringify(chars)}`);
+
+  // marp_render: 実際にレンダーしてスライド数・HTML出力パスを確認（html のみ＝Chrome非依存）
+  const marp = await callTool(
+    'marp_render',
+    { markdown: '# A\n\n---\n\n# B', formats: ['html'] },
+    5,
+  );
+  assert.equal(marp.slides, 2, `marp_render slides mismatch: ${JSON.stringify(marp)}`);
+  assert.ok(marp.outputs?.html, `marp_render produced no html: ${JSON.stringify(marp)}`);
+  {
+    const { readFile, rm } = await import('node:fs/promises');
+    const html = await readFile(marp.outputs.html, 'utf8');
+    assert.ok(html.includes('<section id='), 'marp_render html has slide sections');
+    await rm(marp.outputs.html, { force: true });
+  }
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

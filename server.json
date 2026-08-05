@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.First-CH/tools-mcp",
-  "description": "MCP tools: WCAG contrast, JP char/X-weight count, WebP convert, JSON-LD, llms.txt, encoding/line-ending convert.",
-  "version": "0.5.0",
+  "description": "MCP tools: WCAG contrast, JP char/X-weight count, WebP convert, JSON-LD, llms.txt, encoding/line-ending convert, Marp Markdown→slides render.",
+  "version": "0.6.0",
   "repository": {
     "url": "https://github.com/First-CH/firstch-tools-mcp",
     "source": "github"
@@ -11,7 +11,7 @@
     {
       "registryType": "npm",
       "identifier": "@first-ch/tools-mcp",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "transport": {
         "type": "stdio"
       },
@@ -19,6 +19,13 @@
         {
           "name": "FIRSTCH_TOOLS_USAGE_LOG",
           "description": "Optional. Path to a local JSONL file for opt-in usage logging. No logging when unset.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "MARP_CHROME_PATH",
+          "description": "Optional. Path to a Chrome/Chromium executable used by marp_render for PDF output. Auto-detected on common paths when unset; PDF is skipped (HTML still returned) if none is found.",
           "isRequired": false,
           "isSecret": false,
           "format": "string"
