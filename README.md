@@ -1,6 +1,6 @@
 # @first-ch/tools-mcp
 
-MCP server exposing [First CH Tools](https://tools.first-ch.com)' free web-tool logic — WCAG contrast, JP character/X-weight counting, WebP conversion, JSON-LD generation, llms.txt generation, encoding/line-ending conversion, and Marp Markdown→slide rendering — to AI agents such as Claude Code.
+MCP server exposing [First CH Tools](https://tools.first-ch.com)' free web-tool logic — WCAG contrast, JP character/X-weight counting, WebP conversion, JSON-LD generation, llms.txt generation, encoding/line-ending conversion, Marp Markdown→slide rendering, and Japanese/English test-data generation — to AI agents such as Claude Code.
 
 日本語版は [後半セクション](#日本語) を参照してください。
 
@@ -51,6 +51,7 @@ This server is also registered in the [MCP Registry](https://registry.modelconte
 | `llmstxt_generate` | Generates an `llms.txt` file (per the llmstxt.org proposed format) summarizing a site for AI crawlers/agents | `siteName`, `summary?`, `notes?`, `sections?` |
 | `encoding_convert` | Detects the character encoding (UTF-8 / Shift_JIS), BOM and line endings (CRLF / LF / CR) of a file or text and converts it to UTF-8. Useful for diagnosing garbled Japanese CSVs and for normalising line endings. Output is UTF-8 only — encoding *to* Shift_JIS is not supported (no standard API, and a mapping table would be required). | `base64` or `text`, `mode` (`analyze` \| `convert`), `encoding`, `newline`, `bom` |
 | `marp_render` | Renders [Marp](https://marp.app) Markdown to slides. Emits a self-contained HTML file (theme CSS inlined; opens in a browser and prints one-slide-per-page) and optionally PDF. Ships a bundled Japanese theme `firstch` (firstch-design tokens: paper/ink/vermilion, IBM Plex Sans JP) used as the default theme. Marp front-matter in the Markdown (`theme:` / `paginate:` / `size:` / `<!-- _class: lead -->`) is honored. | `markdown` or `inputPath`, `theme?`, `formats?` (`html` \| `pdf`), `outputPath?`, `title?` |
+| `testdata_generate` | Generates dummy data for form / CSV-import testing. `mode=records` returns names, kana readings, addresses, postal codes, emails and phone numbers as CSV/TSV/JSON/XLSX with a choice of encoding (UTF-8 / Shift_JIS), BOM and line endings. `format=xlsx` returns a real Excel workbook as base64 (or writes it to `outputPath`) — the ZIP/OOXML parts are assembled directly, with no spreadsheet dependency, and postal codes and phone numbers are written as text cells so leading zeros survive; `mode=text` returns strings of exactly n-1 / n / n+1 characters for `maxlength` boundary tests. All output is fictional (emails use the RFC 2606 `example.com` family). Passing a `seed` makes the output reproducible | `mode?`, `rows?`, `fields?`, `format?`, `locale?`, `encoding?`, `newline?`, `bom?`, `header?`, `seed?`, `preset?`, `length?`, `outputPath?` |
 
 See [`server.mjs`](./server.mjs) for the exact Zod input schemas.
 
@@ -142,6 +143,7 @@ claude mcp add firstch-tools -- npx -y @first-ch/tools-mcp
 | `llmstxt_generate` | AI検索・生成AI向けにサイト概要を伝える `llms.txt`（llmstxt.org提案フォーマット準拠）を生成する | `siteName`・`summary?`・`notes?`・`sections?` |
 | `encoding_convert` | ファイル/テキストの文字コード（UTF-8 / Shift_JIS）・BOM有無・改行コード（CRLF / LF / CR）を判定し、UTF-8へ変換する。日本語CSVの文字化け調査、改行コードの統一に。**出力はUTF-8のみ**（Shift_JISへのエンコードは標準APIに無く変換表が必要なため非対応） | `base64` または `text`、`mode`（`analyze` \| `convert`）、`encoding`、`newline`、`bom` |
 | `marp_render` | [Marp](https://marp.app) Markdown をスライドへレンダリングする。テーマCSSをインラインした自己完結HTML（ブラウザで開けて、印刷すると1スライド=1ページ）と、任意でPDFを書き出す。和文テーマ `firstch`（firstch-design トークン: 紙/墨/朱・IBM Plex Sans JP）を同梱し既定テーマにする。Markdown内の Marp フロントマター（`theme:` / `paginate:` / `size:` / `<!-- _class: lead -->`）はそのまま効く | `markdown` または `inputPath`、`theme?`、`formats?`（`html` \| `pdf`）、`outputPath?`、`title?` |
+| `testdata_generate` | フォーム入力・CSV取り込みテスト用のダミーデータを生成する。`mode=records` は氏名・フリガナ・住所・郵便番号・メール・電話番号などをCSV/TSV/JSON/XLSXで返し、文字コード（UTF-8 / Shift_JIS）・BOM・改行コードを指定できる。`format=xlsx` は Excel ファイル本体を base64（または `outputPath` へ書き出し）で返す。ZIP+OOXMLを依存ライブラリなしで直接組み立てており、郵便番号・電話番号は文字列セルにするため先頭の0が消えない。`mode=text` は `maxlength` の境界値テスト用に n-1 / n / n+1 文字ちょうどの文字列を返す。生成データはすべて架空（メールは RFC 2606 の `example.com` 系）。`seed` を渡すと同じデータを再現できる | `mode?`・`rows?`・`fields?`・`format?`・`locale?`・`encoding?`・`newline?`・`bom?`・`header?`・`seed?`・`preset?`・`length?`・`outputPath?` |
 
 正確な入力スキーマ（Zod定義）は [`server.mjs`](./server.mjs) を参照してください。
 
