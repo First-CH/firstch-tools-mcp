@@ -10,6 +10,7 @@ import { contrastCheck, countChars, buildLlmsTxt, buildJsonLd, analyzeEncoding, 
 import { generateTestData, FIELDS, DEFAULT_FIELDS, PRESETS } from './testdata.mjs';
 import { convertToWebp } from './webp.mjs';
 import { renderMarp } from './marp.mjs';
+import { diffCheck } from './diff.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -290,6 +291,61 @@ server.registerTool(
       delete result.base64;
     }
     return asText(result);
+  },
+);
+
+server.registerTool(
+  'diff_check',
+  {
+    title: 'テキスト・コード差分チェック',
+    description:
+      '2つのテキスト（またはファイル）を比較し、追加・削除・変更の件数と unified diff（.patch）を返す' +
+      '（tools.first-ch.com/diff/ と同一ロジック）。原稿の推敲差分の確認、コード修正のレビュー、' +
+      '設定ファイルの比較、AIが書き換えた文章の変更点の抽出に使う。' +
+      '行の対応づけは patience diff（両方に1回だけ現れる行をアンカーに分割）＋アンカーの取れない範囲だけ Myers。' +
+      'format=blocks / both では、変更行のペアを語単位（英数字はひとかたまり・和文は1文字ずつ）で比較した ' +
+      'changed_parts も返すため、「どの語が変わったか」まで取れる。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      a: z.string().optional().describe('変更前のテキスト（pathA と排他・どちらか必須）'),
+      b: z.string().optional().describe('変更後のテキスト（pathB と排他・どちらか必須）'),
+      pathA: z.string().optional().describe('変更前ファイルの絶対パス（a 未指定時に読み込む・UTF-8）'),
+      pathB: z.string().optional().describe('変更後ファイルの絶対パス（b 未指定時に読み込む・UTF-8）'),
+      format: z
+        .enum(['unified', 'blocks', 'both'])
+        .optional()
+        .describe('既定 unified。blocks は変更ブロックの配列、both は両方'),
+      context: z.number().int().min(0).max(100).optional().describe('unified diff の前後コンテキスト行数（既定3）'),
+      ignoreWhitespace: z.boolean().optional().describe('空白の違いを無視するか（既定 false）'),
+      ignoreCase: z.boolean().optional().describe('大文字・小文字の違いを無視するか（既定 false）'),
+      words: z.boolean().optional().describe('語単位の変更点も求めるか（既定 true・format=blocks/both で返る）'),
+    },
+  },
+  async ({ a, b, pathA, pathB, format, context, ignoreWhitespace, ignoreCase, words }) => {
+    await logUsage('diff_check');
+    let textA = a;
+    let textB = b;
+    if (textA === undefined && pathA) {
+      const { readFile } = await import('node:fs/promises');
+      textA = await readFile(pathA, 'utf8');
+    }
+    if (textB === undefined && pathB) {
+      const { readFile } = await import('node:fs/promises');
+      textB = await readFile(pathB, 'utf8');
+    }
+    if (textA === undefined || textB === undefined) {
+      throw new Error('a/b（テキスト）か pathA/pathB（ファイルパス）で、両側の入力を渡してください');
+    }
+    return asText(
+      diffCheck(textA, textB, {
+        format,
+        context,
+        ignoreWhitespace,
+        ignoreCase,
+        words,
+        nameA: pathA || 'a',
+        nameB: pathB || 'b',
+      }),
+    );
   },
 );
 

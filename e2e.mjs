@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 8 registered tools, and `tools/call` actually executes handlers
-// (contrast_check / count_chars / marp_render / testdata_generate) and returns the expected values — this catches
+// returns all 9 registered tools, and `tools/call` actually executes handlers
+// (contrast_check / count_chars / marp_render / testdata_generate / diff_check) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -58,6 +58,7 @@ try {
   const expected = [
     'contrast_check',
     'count_chars',
+    'diff_check',
     'encoding_convert',
     'jsonld_generate',
     'llmstxt_generate',
@@ -120,6 +121,21 @@ try {
   assert.equal(xlBytes.length, xl.bytes, 'xlsx byte count mismatch');
   assert.deepEqual([...xlBytes.subarray(0, 2)], [0x50, 0x4b], 'xlsx is not a ZIP');
   assert.ok(xlBytes.includes(Buffer.from('xl/worksheets/sheet1.xml')), 'xlsx is missing the worksheet part');
+
+  // diff_check: 実際に差分を取り、unified diff と件数が返ること
+  const diff = await callTool('diff_check', { a: 'a\nb\nc\n', b: 'a\nB\nc\n', format: 'both' }, 9);
+  assert.equal(diff.identical, false, `diff_check identical mismatch: ${JSON.stringify(diff)}`);
+  assert.equal(diff.changed, 1, `diff_check changed mismatch: ${JSON.stringify(diff)}`);
+  assert.equal(diff.unchanged, 2, `diff_check unchanged mismatch: ${JSON.stringify(diff)}`);
+  assert.equal(
+    diff.unified,
+    '--- a\n+++ b\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n',
+    `diff_check unified mismatch: ${JSON.stringify(diff.unified)}`,
+  );
+  assert.deepEqual(diff.changes?.[0]?.added?.map((r) => r.line), [2], `diff_check changes mismatch: ${JSON.stringify(diff.changes)}`);
+
+  const identical = await callTool('diff_check', { a: 'x\ny\n', b: 'x\r\ny\r\n' }, 10);
+  assert.equal(identical.identical, true, `diff_check should ignore line-ending style: ${JSON.stringify(identical)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

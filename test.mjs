@@ -1,6 +1,7 @@
 // lib.mjs の簡易テスト（既知の参照値と突合）
 import assert from 'node:assert/strict';
 import { contrastCheck, countChars, analyzeEncoding, convertEncoding, detectNewline, convertNewline } from './lib.mjs';
+import { diffCheck, diffSeq, buildDiff, toUnified, splitLines } from './diff.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -393,6 +394,109 @@ assert.equal(over.x_postable, false);
   const big = generateTestData({ rows: 1000, seed: 'big', format: 'xlsx', fields: FIELDS });
   const bigSheet = unzip(new Uint8Array(Buffer.from(big.base64, 'base64')))['xl/worksheets/sheet1.xml'];
   assert.match(bigSheet, /<dimension ref="A1:N1001"\/>/);
+}
+
+// ---- テキスト差分（diff_check） ----
+{
+  // 1行だけ書き換え
+  const one = diffCheck('a\nb\nc\n', 'a\nB\nc\n', { format: 'both' });
+  assert.equal(one.identical, false);
+  assert.deepEqual(
+    [one.added, one.removed, one.changed, one.unchanged],
+    [0, 0, 1, 2],
+    '1行書き換えは changed=1',
+  );
+  assert.equal(one.unified, '--- a\n+++ b\n@@ -1,3 +1,3 @@\n a\n-b\n+B\n c\n');
+  assert.equal(one.changes.length, 1);
+  assert.deepEqual(one.changes[0].removed.map((r) => r.line), [2]);
+  assert.deepEqual(one.changes[0].added.map((r) => r.line), [2]);
+
+  // 同一なら unified も changes も付けない（差分が無いことを identical で示す）
+  const same = diffCheck('x\ny\n', 'x\ny\n', { format: 'both' });
+  assert.equal(same.identical, true);
+  assert.equal(same.unified, undefined);
+  assert.equal(same.changes, undefined);
+  assert.equal(same.unchanged, 2);
+
+  // 改行コードが違うだけなら同一扱い（CRLF / CR / LF は同じ行区切り）
+  assert.equal(diffCheck('a\r\nb\r\n', 'a\nb\n').identical, true);
+  assert.equal(diffCheck('a\rb\r', 'a\nb\n').identical, true);
+
+  // 行末の空白だけの差は既定で無視。行中の空白は ignoreWhitespace が必要
+  assert.equal(diffCheck('a  \nb\n', 'a\nb\n').identical, true);
+  assert.equal(diffCheck('a  b\n', 'a b\n').identical, false);
+  assert.equal(diffCheck('a  b\n', 'a b\n', { ignoreWhitespace: true }).identical, true);
+  assert.equal(diffCheck('Abc\n', 'abc\n').identical, false);
+  assert.equal(diffCheck('Abc\n', 'abc\n', { ignoreCase: true }).identical, true);
+
+  // 純粋な追加・削除は changed ではなく added / removed に出る
+  const addOnly = diffCheck('a\nb\n', 'a\nx\ny\nb\n');
+  assert.deepEqual([addOnly.added, addOnly.removed, addOnly.changed], [2, 0, 0]);
+  const delOnly = diffCheck('a\nx\ny\nb\n', 'a\nb\n');
+  assert.deepEqual([delOnly.added, delOnly.removed, delOnly.changed], [0, 2, 0]);
+
+  // 空文字は0行。片側が空なら全行が追加/削除
+  assert.deepEqual(splitLines(''), []);
+  assert.deepEqual(splitLines('a\n'), ['a']);
+  assert.deepEqual(splitLines('a\n\n'), ['a', '']);
+  const fromEmpty = diffCheck('', 'a\nb\n');
+  assert.deepEqual([fromEmpty.added, fromEmpty.removed, fromEmpty.changed], [2, 0, 0]);
+  assert.equal(diffCheck('', '').identical, true);
+
+  // 語単位: 変更ペアは changed_parts に「変わった語」だけが入る（隣接は連結される）
+  const words = diffCheck('const greet = (name) => {\n', 'const greet = (name, lang = "ja") => {\n', { format: 'blocks' });
+  assert.deepEqual(words.changes[0].added[0].changed_parts, [', lang = "ja"']);
+  assert.deepEqual(words.changes[0].removed[0].changed_parts, []);
+  // 和文は1文字ずつ比べる（分かち書きが無いため）
+  const ja = diffCheck('これはテストです\n', 'これは試験です\n', { format: 'blocks' });
+  assert.deepEqual(ja.changes[0].removed[0].changed_parts, ['テスト']);
+  assert.deepEqual(ja.changes[0].added[0].changed_parts, ['試験']);
+  // 共通部分が3割未満のペアは「別の行」とみなして語ハイライトしない
+  const unrelated = diffCheck('aaaaaaaaaaaa\n', 'bbbbbbbbbbbb\n', { format: 'blocks' });
+  assert.equal(unrelated.changes[0].removed[0].changed_parts, undefined);
+
+  // words:false なら語単位の比較をしない
+  const noWords = diffCheck('これはテストです\n', 'これは試験です\n', { format: 'blocks', words: false });
+  assert.equal(noWords.changes[0].removed[0].changed_parts, undefined);
+
+  // コンテキスト行数と、離れた変更が別ハンクになること
+  const lines = (n, f = (i) => `line ${i}`) => Array.from({ length: n }, (_, i) => f(i + 1)).join('\n') + '\n';
+  const far = toUnified(lines(40), lines(40, (i) => (i === 5 || i === 35 ? `line ${i} X` : `line ${i}`)), {}, 'a', 'b', 3);
+  assert.equal((far.match(/^@@ /gm) || []).length, 2, '離れた変更は2ハンクに分かれる');
+  assert.match(far, /^@@ -2,7 \+2,7 @@$/m);
+  const ctx0 = toUnified('a\nb\nc\n', 'a\nB\nc\n', {}, 'a', 'b', 0);
+  assert.equal(ctx0, '--- a\n+++ b\n@@ -2,1 +2,1 @@\n-b\n+B\n');
+
+  // ファイル名はヘッダーに反映される
+  assert.match(diffCheck('a\n', 'b\n', { nameA: 'old.css', nameB: 'new.css' }).unified, /^--- old\.css\n\+\+\+ new\.css$/m);
+
+  // 差分の走査順の不変条件（a側・b側それぞれの添字を昇順にちょうど1回ずつ通る）
+  const A = ['x', 'y', 'z', 'y', 'q'];
+  const B = ['y', 'z', 'q', 'q', 'w'];
+  const ops = diffSeq(A, B);
+  assert.deepEqual(ops.filter((o) => o.a >= 0).map((o) => o.a), [0, 1, 2, 3, 4]);
+  assert.deepEqual(ops.filter((o) => o.b >= 0).map((o) => o.b), [0, 1, 2, 3, 4]);
+  for (const o of ops) if (o.t === '=') assert.equal(A[o.a], B[o.b]);
+
+  // 大きな入力でも現実的な時間で終わる（patience diff のアンカーが効いていること）
+  const big = lines(20000);
+  const bigB = lines(20000, (i) => (i % 500 === 0 ? `line ${i} changed` : `line ${i}`));
+  const t0 = Date.now();
+  const bigDiff = diffCheck(big, bigB);
+  assert.equal(bigDiff.changed, 40);
+  assert.equal(bigDiff.unchanged, 19960);
+  assert.ok(Date.now() - t0 < 10000, `20000行の差分が遅すぎる: ${Date.now() - t0}ms`);
+
+  // まったく無関係な大きい入力でも、上限で打ち切って必ず返る
+  const noise = (tag) => Array.from({ length: 3000 }, (_, i) => `${tag}-${i}`).join('\n') + '\n';
+  const wild = diffCheck(noise('p'), noise('q'));
+  assert.equal(wild.identical, false);
+  assert.equal(wild.unchanged, 0);
+  assert.equal(wild.lines_a, 3000);
+
+  // blocks では変更のあったブロックだけを返す
+  const blocks = buildDiff('a\nb\nc\nd\n', 'a\nB\nc\nD\n', {});
+  assert.equal(blocks.blocks.filter((x) => x.t === 'change').length, 2);
 }
 
 console.log('all tests passed');
