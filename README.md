@@ -1,6 +1,6 @@
 # @first-ch/tools-mcp
 
-MCP server exposing [First CH Tools](https://tools.first-ch.com)' free web-tool logic — WCAG contrast, JP character/X-weight counting, WebP conversion, JSON-LD, llms.txt generation, encoding conversion, and Japanese/English test-data generation — to AI agents such as Claude Code.
+MCP server exposing [First CH Tools](https://tools.first-ch.com)' free web-tool logic — WCAG contrast, JP character/X-weight counting, WebP conversion, JSON-LD generation, llms.txt generation, encoding/line-ending conversion, Marp Markdown→slide rendering, and Japanese/English test-data generation — to AI agents such as Claude Code.
 
 日本語版は [後半セクション](#日本語) を参照してください。
 
@@ -50,9 +50,12 @@ This server is also registered in the [MCP Registry](https://registry.modelconte
 | `jsonld_generate` | Generates schema.org JSON-LD for `organization` / `faqpage` / `service` / `breadcrumb`. Empty fields are omitted automatically. Returns both a `json` object and a ready-to-embed `<script>` snippet | `type`, plus the matching `organization` / `faq` / `service` / `breadcrumb` object |
 | `llmstxt_generate` | Generates an `llms.txt` file (per the llmstxt.org proposed format) summarizing a site for AI crawlers/agents | `siteName`, `summary?`, `notes?`, `sections?` |
 | `encoding_convert` | Detects the character encoding (UTF-8 / Shift_JIS), BOM and line endings (CRLF / LF / CR) of a file or text and converts it to UTF-8. Useful for diagnosing garbled Japanese CSVs and for normalising line endings. Output is UTF-8 only — encoding *to* Shift_JIS is not supported (no standard API, and a mapping table would be required). | `base64` or `text`, `mode` (`analyze` \| `convert`), `encoding`, `newline`, `bom` |
+| `marp_render` | Renders [Marp](https://marp.app) Markdown to slides. Emits a self-contained HTML file (theme CSS inlined; opens in a browser and prints one-slide-per-page) and optionally PDF. Ships a bundled Japanese theme `firstch` (firstch-design tokens: paper/ink/vermilion, IBM Plex Sans JP) used as the default theme. Marp front-matter in the Markdown (`theme:` / `paginate:` / `size:` / `<!-- _class: lead -->`) is honored. | `markdown` or `inputPath`, `theme?`, `formats?` (`html` \| `pdf`), `outputPath?`, `title?` |
 | `testdata_generate` | Generates dummy data for form / CSV-import testing. `mode=records` returns names, kana readings, addresses, postal codes, emails and phone numbers as CSV/TSV/JSON/XLSX with a choice of encoding (UTF-8 / Shift_JIS), BOM and line endings. `format=xlsx` returns a real Excel workbook as base64 (or writes it to `outputPath`) — the ZIP/OOXML parts are assembled directly, with no spreadsheet dependency, and postal codes and phone numbers are written as text cells so leading zeros survive; `mode=text` returns strings of exactly n-1 / n / n+1 characters for `maxlength` boundary tests. All output is fictional (emails use the RFC 2606 `example.com` family). Passing a `seed` makes the output reproducible | `mode?`, `rows?`, `fields?`, `format?`, `locale?`, `encoding?`, `newline?`, `bom?`, `header?`, `seed?`, `preset?`, `length?`, `outputPath?` |
 
 See [`server.mjs`](./server.mjs) for the exact Zod input schemas.
+
+**PDF output (`marp_render`) needs a local Chrome/Chromium.** marp-core renders the HTML with no browser dependency (so the package stays light for `npx`); PDF is produced by driving a locally-installed Chrome/Chromium in headless mode. It is auto-detected on common paths, or set `MARP_CHROME_PATH` to the executable. If none is found, `marp_render` returns the HTML only and reports `pdf_skipped` — you can still open that HTML and print → PDF yourself (one slide per page).
 
 ## Telemetry
 
@@ -81,7 +84,7 @@ Both license files are included verbatim in the published npm package, as requir
 
 ```bash
 npm ci
-npm test        # unit tests (lib.mjs / webp.mjs), see test.mjs
+npm test        # unit tests (lib.mjs / webp.mjs / marp.mjs), see test.mjs
 node e2e.mjs     # stdio smoke test: spawns server.mjs, lists tools, calls a couple of handlers
 ```
 
@@ -91,7 +94,7 @@ CI runs both across Node 18.14.1 / 20 / 22, plus a vendor checksum check and a p
 
 ## 日本語
 
-`@first-ch/tools-mcp` は、[First CH Tools](https://tools.first-ch.com)（無料Webツール集）の計算ロジック — WCAGコントラスト比・日本語文字数/Xウェイト計測・WebP変換・JSON-LD生成・llms.txt生成 — をAIエージェント（Claude Code等）向けMCPツールとして提供するサーバーです。
+`@first-ch/tools-mcp` は、[First CH Tools](https://tools.first-ch.com)（無料Webツール集）の計算ロジック — WCAGコントラスト比・日本語文字数/Xウェイト計測・WebP変換・JSON-LD生成・llms.txt生成・文字コード/改行コード変換・Marp Markdown→スライド レンダリング — をAIエージェント（Claude Code等）向けMCPツールとして提供するサーバーです。
 
 ### インストール
 
@@ -139,9 +142,12 @@ claude mcp add firstch-tools -- npx -y @first-ch/tools-mcp
 | `jsonld_generate` | schema.org準拠のJSON-LDを生成する（`organization` / `faqpage` / `service` / `breadcrumb`）。空項目は自動で省略。`json`オブジェクトと埋め込み用`<script>`スニペットの両方を返す | `type` と対応する `organization` / `faq` / `service` / `breadcrumb` オブジェクト |
 | `llmstxt_generate` | AI検索・生成AI向けにサイト概要を伝える `llms.txt`（llmstxt.org提案フォーマット準拠）を生成する | `siteName`・`summary?`・`notes?`・`sections?` |
 | `encoding_convert` | ファイル/テキストの文字コード（UTF-8 / Shift_JIS）・BOM有無・改行コード（CRLF / LF / CR）を判定し、UTF-8へ変換する。日本語CSVの文字化け調査、改行コードの統一に。**出力はUTF-8のみ**（Shift_JISへのエンコードは標準APIに無く変換表が必要なため非対応） | `base64` または `text`、`mode`（`analyze` \| `convert`）、`encoding`、`newline`、`bom` |
+| `marp_render` | [Marp](https://marp.app) Markdown をスライドへレンダリングする。テーマCSSをインラインした自己完結HTML（ブラウザで開けて、印刷すると1スライド=1ページ）と、任意でPDFを書き出す。和文テーマ `firstch`（firstch-design トークン: 紙/墨/朱・IBM Plex Sans JP）を同梱し既定テーマにする。Markdown内の Marp フロントマター（`theme:` / `paginate:` / `size:` / `<!-- _class: lead -->`）はそのまま効く | `markdown` または `inputPath`、`theme?`、`formats?`（`html` \| `pdf`）、`outputPath?`、`title?` |
 | `testdata_generate` | フォーム入力・CSV取り込みテスト用のダミーデータを生成する。`mode=records` は氏名・フリガナ・住所・郵便番号・メール・電話番号などをCSV/TSV/JSON/XLSXで返し、文字コード（UTF-8 / Shift_JIS）・BOM・改行コードを指定できる。`format=xlsx` は Excel ファイル本体を base64（または `outputPath` へ書き出し）で返す。ZIP+OOXMLを依存ライブラリなしで直接組み立てており、郵便番号・電話番号は文字列セルにするため先頭の0が消えない。`mode=text` は `maxlength` の境界値テスト用に n-1 / n / n+1 文字ちょうどの文字列を返す。生成データはすべて架空（メールは RFC 2606 の `example.com` 系）。`seed` を渡すと同じデータを再現できる | `mode?`・`rows?`・`fields?`・`format?`・`locale?`・`encoding?`・`newline?`・`bom?`・`header?`・`seed?`・`preset?`・`length?`・`outputPath?` |
 
 正確な入力スキーマ（Zod定義）は [`server.mjs`](./server.mjs) を参照してください。
+
+**`marp_render` のPDF出力にはローカルの Chrome/Chromium が必要です。** marp-core によるHTML生成はブラウザ非依存（`npx` 導入を軽く保つため）で、PDFはローカルインストール済みの Chrome/Chromium を headless で駆動して生成します。定番パスから自動検出し、`MARP_CHROME_PATH` で実行ファイルを明示することもできます。見つからない場合は HTML のみを返し `pdf_skipped` を報告します（そのHTMLを開いて印刷→PDF保存でも1スライド=1ページで作成できます）。
 
 ### 計測（Telemetry）について
 
@@ -170,7 +176,7 @@ claude mcp add firstch-tools -- npx -y @first-ch/tools-mcp
 
 ```bash
 npm ci
-npm test        # ユニットテスト（lib.mjs / webp.mjs）。詳細は test.mjs
+npm test        # ユニットテスト（lib.mjs / webp.mjs / marp.mjs）。詳細は test.mjs
 node e2e.mjs     # stdio smokeテスト: server.mjsを子プロセス起動しツール一覧取得・実行を検証
 ```
 

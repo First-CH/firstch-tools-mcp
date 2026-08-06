@@ -147,6 +147,55 @@ assert.equal(over.x_postable, false);
   assert.equal(a3.encoding_detected, false);
 }
 
+// ---- Marp レンダリング（marp_render） ----
+{
+  const { renderMarp, findChrome } = await import('./marp.mjs');
+  const { readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+
+  const md = `# タイトル\n\n本文\n\n---\n\n## 2枚目\n- 箇条書き\n`;
+  const base = join(tmpdir(), `firstch-marp-test-${process.pid}`);
+
+  // HTML: 自己完結ファイル・スライド数・既定テーマ firstch が効いていること
+  const r = await renderMarp(md, { outputPath: base, formats: ['html'] });
+  assert.equal(r.theme, 'firstch');
+  assert.equal(r.slides, 2);
+  assert.equal(r.outputs.html, `${base}.html`);
+  const html = await readFile(r.outputs.html, 'utf8');
+  assert.ok(html.includes('<!DOCTYPE html>'));
+  assert.equal((html.match(/<section id=/g) || []).length, 2);
+  assert.ok(html.includes('#faf8f4'), 'firstch テーマの紙色がインラインされている');
+  assert.ok(html.includes('@page'), '印刷用CSS(@page)がある');
+  await rm(r.outputs.html, { force: true });
+
+  // md 内の theme 指示が既定より優先される
+  const g = await renderMarp(`<!-- theme: gaia -->\n# G`, { outputPath: base, formats: ['html'] });
+  const ghtml = await readFile(g.outputs.html, 'utf8');
+  assert.ok(!ghtml.includes('#faf8f4'), 'gaia 指示で firstch は適用されない');
+  await rm(g.outputs.html, { force: true });
+
+  // 空入力・未対応テーマ・未対応formatはthrow
+  await assert.rejects(() => renderMarp(''));
+  await assert.rejects(() => renderMarp('# x', { theme: 'zzz' }));
+  await assert.rejects(() => renderMarp('# x', { formats: ['docx'] }));
+
+  // PDF: Chrome があれば実際に生成して2ページ、無ければ pdf_skipped を返す
+  const chrome = findChrome();
+  const p = await renderMarp(md, { outputPath: base, formats: ['html', 'pdf'] });
+  if (chrome) {
+    assert.equal(p.outputs.pdf, `${base}.pdf`);
+    const pdf = await readFile(p.outputs.pdf);
+    assert.equal(pdf.slice(0, 5).toString(), '%PDF-', 'PDFシグネチャ');
+    const count = (pdf.toString('latin1').match(/\/Type\s*\/Pages[^s].*?\/Count\s+(\d+)/s) || [])[1];
+    assert.equal(count, '2', `PDFは2ページ（実際: ${count}）`);
+    await rm(p.outputs.pdf, { force: true });
+  } else {
+    assert.ok(p.pdf_skipped, 'Chrome 未検出時は pdf_skipped を返す');
+  }
+  await rm(p.outputs.html, { force: true });
+}
+
 // ---- テストデータ生成（testdata_generate） ----
 {
   const { generateTestData, generateRecords, serialize, encodeText, sjisEncode, FIELDS } = await import('./testdata.mjs');
@@ -250,7 +299,11 @@ assert.equal(over.x_postable, false);
 // ---- .xlsx 書き出し（testdata_generate format=xlsx） ----
 {
   const { generateTestData, buildXlsx, generateRecords, FIELDS } = await import('./testdata.mjs');
+  // node:zlib の crc32 は Node 20.15 / 22.2 以降にしか無い。engines の下限は 18.14.1 なので、
+  // 無い環境ではCRCの照合だけ飛ばす（ZIP構造・中身の検査は下で従来どおり行う）。
+  // 自前の crc32 を借りて突き合わせても、同じ実装どうしの比較になり検査の意味が無いため代替にしない。
   const { crc32 } = await import('node:zlib');
+  const canVerifyCrc = typeof crc32 === 'function';
 
   /** 無圧縮ZIPを読み、CRCを検証しつつ { 名前: 中身 } を返す（自前ライターの逆操作） */
   const unzip = (buf) => {
@@ -275,7 +328,7 @@ assert.equal(over.x_postable, false);
       assert.equal(dv.getUint16(local + 8, true), 0, '無圧縮(store)で格納されている');
       const start = local + 30 + dv.getUint16(local + 26, true) + dv.getUint16(local + 28, true);
       const body = buf.subarray(start, start + size);
-      assert.equal(crc32(body), crc, `CRC不一致: ${name}`);
+      if (canVerifyCrc) assert.equal(crc32(body), crc, `CRC不一致: ${name}`);
       out[name] = new TextDecoder().decode(body);
       p += 46 + nameLen + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true);
     }

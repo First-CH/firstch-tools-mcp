@@ -2,7 +2,7 @@
   "name": "firstch-tools",
   "displayName": "First CH Tools",
   "version": "0.7.0",
-  "description": "MCP tools for WCAG contrast check, JP character/X-weight count, WebP conversion, JSON-LD generation, llms.txt generation, encoding/line-ending conversion, and test data generation — the same logic that powers tools.first-ch.com.",
+  "description": "MCP tools for WCAG contrast check, JP character/X-weight count, WebP conversion, JSON-LD generation, llms.txt generation, encoding/line-ending conversion, Marp Markdown→slide rendering, and test data generation — the same logic that powers tools.first-ch.com.",
   "author": {
     "name": "First CH LLC",
     "url": "https://first-ch.com"

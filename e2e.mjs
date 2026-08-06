@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 7 registered tools, and `tools/call` actually executes handlers
-// (contrast_check / count_chars) and returns the expected values — this catches
+// returns all 8 registered tools, and `tools/call` actually executes handlers
+// (contrast_check / count_chars / marp_render / testdata_generate) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -61,6 +61,7 @@ try {
     'encoding_convert',
     'jsonld_generate',
     'llmstxt_generate',
+    'marp_render',
     'testdata_generate',
     'webp_convert',
   ];
@@ -84,12 +85,27 @@ try {
   assert.equal(chars.x_weight, 20, `count_chars x_weight mismatch: ${JSON.stringify(chars)}`);
   assert.equal(chars.total, 10, `count_chars total mismatch: ${JSON.stringify(chars)}`);
 
+  // marp_render: 実際にレンダーしてスライド数・HTML出力パスを確認（html のみ＝Chrome非依存）
+  const marp = await callTool(
+    'marp_render',
+    { markdown: '# A\n\n---\n\n# B', formats: ['html'] },
+    5,
+  );
+  assert.equal(marp.slides, 2, `marp_render slides mismatch: ${JSON.stringify(marp)}`);
+  assert.ok(marp.outputs?.html, `marp_render produced no html: ${JSON.stringify(marp)}`);
+  {
+    const { readFile, rm } = await import('node:fs/promises');
+    const html = await readFile(marp.outputs.html, 'utf8');
+    assert.ok(html.includes('<section id='), 'marp_render html has slide sections');
+    await rm(marp.outputs.html, { force: true });
+  }
+
   // seed を固定すれば出力は完全に再現される（id列だけなら生成辞書に依存しない）
-  const td = await callTool('testdata_generate', { rows: 2, seed: 'e2e', fields: ['id'], format: 'csv' }, 5);
+  const td = await callTool('testdata_generate', { rows: 2, seed: 'e2e', fields: ['id'], format: 'csv' }, 6);
   assert.equal(td.text, 'id\n1\n2\n', `testdata_generate text mismatch: ${JSON.stringify(td)}`);
   assert.equal(td.seed, 'e2e', `testdata_generate seed mismatch: ${JSON.stringify(td)}`);
 
-  const boundary = await callTool('testdata_generate', { mode: 'text', preset: 'digit', length: 3 }, 6);
+  const boundary = await callTool('testdata_generate', { mode: 'text', preset: 'digit', length: 3 }, 7);
   assert.deepEqual(
     boundary.variants.map((v) => v.text),
     ['01', '012', '0123'],
@@ -98,7 +114,7 @@ try {
 
 
   // format=xlsx は base64 で .xlsx 本体を返す（MCP経由でもバイナリが壊れないこと）
-  const xl = await callTool('testdata_generate', { rows: 2, seed: 'e2e', fields: ['id', 'name'], format: 'xlsx' }, 7);
+  const xl = await callTool('testdata_generate', { rows: 2, seed: 'e2e', fields: ['id', 'name'], format: 'xlsx' }, 8);
   assert.equal(xl.format, 'xlsx', `testdata_generate format mismatch: ${JSON.stringify(xl)}`);
   const xlBytes = Buffer.from(xl.base64, 'base64');
   assert.equal(xlBytes.length, xl.bytes, 'xlsx byte count mismatch');
