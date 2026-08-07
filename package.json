@@ -1,7 +1,7 @@
 {
   "name": "@first-ch/tools-mcp",
-  "version": "0.8.0",
-  "description": "First CH Tools の計算ロジック（WCAGコントラスト比・文字数/Xウェイト・WebP変換・JSON-LD生成・llms.txt生成・文字コード/改行コード変換・Marp Markdown→スライド レンダリング・テストデータ生成・テキスト/コード差分）をMCPツールとして提供するサーバー",
+  "version": "0.9.0",
+  "description": "First CH Tools の計算ロジック（WCAGコントラスト比・文字数/Xウェイト・WebP変換・JSON-LD生成・llms.txt生成・文字コード/改行コード変換・Marp Markdown→スライド レンダリング・テストデータ生成・テキスト/コード差分・Cron式の解説）をMCPツールとして提供するサーバー",
   "type": "module",
   "bin": {
     "firstch-tools-mcp": "server.mjs"
@@ -37,7 +37,10 @@
     "csv",
     "diff",
     "patch",
-    "unified-diff"
+    "unified-diff",
+    "cron",
+    "crontab",
+    "scheduler"
   ],
   "author": "First CH LLC (https://first-ch.com)",
   "homepage": "https://tools.first-ch.com",
@@ -62,6 +65,7 @@
     "marp-theme.css",
     "testdata.mjs",
     "diff.mjs",
+    "cron.mjs",
     "vendor/",
     "README.md",
     "LICENSE"

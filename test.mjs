@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { contrastCheck, countChars, analyzeEncoding, convertEncoding, detectNewline, convertNewline } from './lib.mjs';
 import { diffCheck, diffSeq, buildDiff, toUnified, splitLines } from './diff.mjs';
+import { cronExplain, parseCron, nextFires, describe as cronDescribe, CronError } from './cron.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -497,6 +498,99 @@ assert.equal(over.x_postable, false);
   // blocks では変更のあったブロックだけを返す
   const blocks = buildDiff('a\nb\nc\nd\n', 'a\nB\nc\nD\n', {});
   assert.equal(blocks.blocks.filter((x) => x.t === 'change').length, 2);
+}
+
+// ---- cron.mjs（cron_explain）----
+{
+  const FROM = '2026-08-08T12:03:20+09:00'; // 土曜
+  const TZ = 'Asia/Tokyo';
+  const at = (expr, count = 3, tz = TZ) => cronExplain(expr, { timeZone: tz, count, from: FROM }).next.map((n) => n.local);
+
+  // 基本の展開と次回発火
+  assert.deepEqual(at('*/15 * * * *'), ['2026-08-08 12:15:00', '2026-08-08 12:30:00', '2026-08-08 12:45:00']);
+  assert.deepEqual(at('* * * * *'), ['2026-08-08 12:04:00', '2026-08-08 12:05:00', '2026-08-08 12:06:00']);
+  assert.deepEqual(at('0 9 * * *'), ['2026-08-09 09:00:00', '2026-08-10 09:00:00', '2026-08-11 09:00:00']);
+  // 平日9:30（2026-08-08は土曜なので次は10日の月曜）
+  assert.deepEqual(at('30 9 * * 1-5'), ['2026-08-10 09:30:00', '2026-08-11 09:30:00', '2026-08-12 09:30:00']);
+  // 列挙とVixieの `a/n`（5から10おき）
+  assert.deepEqual(at('30 5 1,15 * *'), ['2026-08-15 05:30:00', '2026-09-01 05:30:00', '2026-09-15 05:30:00']);
+  assert.deepEqual(parseCron('5/10 * * * *').fields.minute.values, [5, 15, 25, 35, 45, 55]);
+  // 省略記法・名前指定
+  assert.deepEqual(at('@weekly'), ['2026-08-09 00:00:00', '2026-08-16 00:00:00', '2026-08-23 00:00:00']);
+  assert.deepEqual(parseCron('0 0 * JAN,JUL *').fields.month.values, [1, 7]);
+  assert.deepEqual(parseCron('0 0 * * MON-FRI').fields.dow.values, [1, 2, 3, 4, 5]);
+  // 曜日の 7 は 0（日曜）。0-7 / 1-7 は全曜日
+  assert.deepEqual(parseCron('0 0 * * 7').fields.dow.values, [0]);
+  assert.equal(parseCron('0 0 * * 0-7').fields.dow.all, true);
+  assert.equal(parseCron('0 0 * * 1-7').fields.dow.all, true);
+  // 月・曜日だけ折り返しを許す
+  assert.deepEqual(parseCron('0 0 * NOV-FEB *').fields.month.values, [1, 2, 11, 12]);
+  assert.deepEqual(parseCron('0 0 * * FRI-MON').fields.dow.values, [0, 1, 5, 6]);
+  assert.throws(() => parseCron('10-5 * * * *'), CronError);
+
+  // 「日」と「曜日」の両方指定は AND ではなく OR（Vixie cron の仕様）
+  const or = cronExplain('0 0 1 * 1', { timeZone: TZ, count: 4, from: FROM });
+  assert.deepEqual(or.next.map((n) => n.local), [
+    '2026-08-10 00:00:00', // 月曜
+    '2026-08-17 00:00:00',
+    '2026-08-24 00:00:00',
+    '2026-08-31 00:00:00',
+  ]);
+  assert.ok(or.warnings_ja.some((w) => w.includes('OR')));
+
+  // 範囲を割り切らない */n は等間隔にならない旨を警告する
+  const uneven = cronExplain('*/7 * * * *', { timeZone: TZ, from: FROM });
+  assert.deepEqual(parseCron('*/7 * * * *').fields.minute.values, [0, 7, 14, 21, 28, 35, 42, 49, 56]);
+  assert.ok(uneven.warnings_ja.some((w) => w.includes('*/7')));
+
+  // 存在しない日付は発火しない／うるう日は4年ごと
+  const never = cronExplain('0 0 30 2 *', { timeZone: TZ, from: FROM });
+  assert.equal(never.never_fires, true);
+  assert.equal(never.next.length, 0);
+  assert.deepEqual(at('0 0 29 2 *', 2), ['2028-02-29 00:00:00', '2032-02-29 00:00:00']);
+
+  // 秒付き6フィールドは先頭が秒
+  const six = cronExplain('*/20 * * * * *', { timeZone: TZ, count: 3, from: FROM });
+  assert.equal(six.has_seconds, true);
+  assert.deepEqual(six.next.map((n) => n.local), ['2026-08-08 12:03:40', '2026-08-08 12:04:00', '2026-08-08 12:04:20']);
+
+  // 夏時間: 存在しない現地時刻（2027-03-14 02:30 America/New_York）は一覧から落とす
+  const spring = cronExplain('30 2 * * *', { timeZone: 'America/New_York', count: 4, from: '2027-03-12T00:00:00Z' });
+  assert.deepEqual(spring.next.map((n) => n.iso), [
+    '2027-03-12T02:30:00-05:00',
+    '2027-03-13T02:30:00-05:00',
+    '2027-03-15T02:30:00-04:00',
+    '2027-03-16T02:30:00-04:00',
+  ]);
+  assert.ok(spring.warnings_ja.some((w) => w.includes('夏時間')));
+  // 夏時間の戻り（重複する現地時刻）は1回だけ返す
+  const fall = cronExplain('30 1 * * *', { timeZone: 'America/New_York', count: 3, from: '2027-11-06T00:00:00Z' });
+  assert.deepEqual(fall.next.map((n) => n.iso), [
+    '2027-11-06T01:30:00-04:00',
+    '2027-11-07T01:30:00-04:00',
+    '2027-11-08T01:30:00-05:00',
+  ]);
+
+  // タイムゾーンを変えると同じ式でも実時刻が変わる（FROM は UTC では 08-08 03:03 なので当日の9時が次）
+  const utc = cronExplain('0 9 * * *', { timeZone: 'UTC', count: 1, from: FROM });
+  assert.equal(utc.next[0].iso, '2026-08-08T09:00:00+00:00');
+  assert.equal(cronExplain('0 9 * * *', { timeZone: TZ, count: 1, from: FROM }).next[0].iso, '2026-08-09T09:00:00+09:00');
+
+  // 読み下し
+  assert.equal(cronDescribe(parseCron('*/15 * * * *'), false), '毎日、15分ごと（毎時 0分・15分・30分・45分）に実行します。');
+  assert.equal(cronDescribe(parseCron('30 9 * * 1-5'), true), 'Runs on Mon–Fri, at 09:30.');
+  assert.equal(cronDescribe(parseCron('@yearly'), false), '1月1日、0時00分に実行します。');
+
+  // 不正な入力
+  for (const bad of ['', '* * * *', '* * * * * * *', '61 * * * *', 'abc * * * *', '* * * * 8', '*/0 * * * *', '@bogus', '@reboot', 'L * * * *', '* * * * 1#2']) {
+    assert.throws(() => parseCron(bad), CronError, `should reject: ${JSON.stringify(bad)}`);
+  }
+  assert.throws(() => cronExplain('* * * * *', { timeZone: 'Nowhere/Nothing' }), /タイムゾーン/);
+
+  // 発火しない式でも現実的な時間で必ず返る
+  const t0 = Date.now();
+  cronExplain('0 0 31 2 *', { timeZone: TZ, count: 5, from: FROM });
+  assert.ok(Date.now() - t0 < 5000, `存在しない日付の探索が遅すぎる: ${Date.now() - t0}ms`);
 }
 
 console.log('all tests passed');

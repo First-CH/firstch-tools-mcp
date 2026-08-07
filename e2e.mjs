@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 9 registered tools, and `tools/call` actually executes handlers
-// (contrast_check / count_chars / marp_render / testdata_generate / diff_check) and returns the expected values — this catches
+// returns all 10 registered tools, and `tools/call` actually executes handlers
+// (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -58,6 +58,7 @@ try {
   const expected = [
     'contrast_check',
     'count_chars',
+    'cron_explain',
     'diff_check',
     'encoding_convert',
     'jsonld_generate',
@@ -136,6 +137,21 @@ try {
 
   const identical = await callTool('diff_check', { a: 'x\ny\n', b: 'x\r\ny\r\n' }, 10);
   assert.equal(identical.identical, true, `diff_check should ignore line-ending style: ${JSON.stringify(identical)}`);
+
+  // cron_explain: from を固定して読み下しと発火日時を突合（実行時刻に依存しない）
+  const cron = await callTool(
+    'cron_explain',
+    { expression: '*/15 * * * *', timeZone: 'Asia/Tokyo', count: 2, from: '2026-08-08T12:03:20+09:00' },
+    11,
+  );
+  assert.equal(cron.description_ja, '毎日、15分ごと（毎時 0分・15分・30分・45分）に実行します。', `cron_explain description mismatch: ${JSON.stringify(cron.description_ja)}`);
+  assert.deepEqual(
+    cron.next.map((n) => n.local),
+    ['2026-08-08 12:15:00', '2026-08-08 12:30:00'],
+    `cron_explain next mismatch: ${JSON.stringify(cron.next)}`,
+  );
+  const cronErr = await request('tools/call', { name: 'cron_explain', arguments: { expression: '61 * * * *' } }, 12);
+  assert.ok(cronErr.result?.isError, `cron_explain should reject an out-of-range field: ${JSON.stringify(cronErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

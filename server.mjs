@@ -11,6 +11,7 @@ import { generateTestData, FIELDS, DEFAULT_FIELDS, PRESETS } from './testdata.mj
 import { convertToWebp } from './webp.mjs';
 import { renderMarp } from './marp.mjs';
 import { diffCheck } from './diff.mjs';
+import { cronExplain } from './cron.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -346,6 +347,33 @@ server.registerTool(
         nameB: pathB || 'b',
       }),
     );
+  },
+);
+
+server.registerTool(
+  'cron_explain',
+  {
+    title: 'Cron式の解説＋次回発火日時',
+    description:
+      'Cron式（例: */15 * * * *）を人間向けの文へ読み下し、次回からの発火日時を返す' +
+      '（tools.first-ch.com/cron/ と同一ロジック）。バッチ・CI・スケジューラの設定レビュー、' +
+      '「この式は結局いつ動くのか」の確認、書き間違いの検出に使う。解釈は Vixie cron（crontab(5)）準拠で、' +
+      '範囲・ステップ・列挙・JAN-DEC / SUN-SAT の名前・@daily 等の省略記法に対応し、6フィールドのときは先頭を秒として扱う。' +
+      '「日」と「曜日」の両方が指定されたときの OR 解釈、範囲を割り切らない */n、存在しない日付（2月30日など）は warnings で知らせる。' +
+      '発火日時はタイムゾーンの壁時計上で求めてから実時刻へ戻すため、夏時間のある地域でもずれない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      expression: z.string().describe('Cron式（5フィールド「分 時 日 月 曜日」/ 秒付き6フィールド / @daily 等）'),
+      timeZone: z
+        .string()
+        .optional()
+        .describe('発火日時を求めるタイムゾーン（IANA名。既定 UTC。例: Asia/Tokyo）'),
+      count: z.number().int().min(1).max(100).optional().describe('返す発火日時の件数（既定5・最大100）'),
+      from: z.string().optional().describe('この日時より後を探す（ISO8601。既定は現在時刻）'),
+    },
+  },
+  async ({ expression, timeZone, count, from }) => {
+    await logUsage('cron_explain');
+    return asText(cronExplain(expression, { timeZone, count, from }));
   },
 );
 
