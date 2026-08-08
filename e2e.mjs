@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 10 registered tools, and `tools/call` actually executes handlers
-// (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain) and returns the expected values — this catches
+// returns all 11 registered tools, and `tools/call` actually executes handlers
+// (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain / base64_encode) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -56,6 +56,7 @@ try {
   const listRes = await request('tools/list', {}, 2);
   const names = (listRes.result?.tools || []).map((t) => t.name).sort();
   const expected = [
+    'base64_encode',
     'contrast_check',
     'count_chars',
     'cron_explain',
@@ -152,6 +153,30 @@ try {
   );
   const cronErr = await request('tools/call', { name: 'cron_explain', arguments: { expression: '61 * * * *' } }, 12);
   assert.ok(cronErr.result?.isError, `cron_explain should reject an out-of-range field: ${JSON.stringify(cronErr)}`);
+
+  // base64_encode: エンコード → デコードの往復がMCP越しでも壊れないこと
+  const b64 = await callTool('base64_encode', { text: 'こんにちは', dataUri: true }, 13);
+  assert.equal(b64.base64, Buffer.from('こんにちは', 'utf8').toString('base64'), `base64_encode mismatch: ${JSON.stringify(b64)}`);
+  assert.equal(b64.data_uri, 'data:text/plain;charset=utf-8;base64,' + b64.base64, `base64_encode data_uri mismatch: ${JSON.stringify(b64)}`);
+
+  const b64back = await callTool('base64_encode', { mode: 'decode', base64: b64.data_uri }, 14);
+  assert.equal(b64back.text, 'こんにちは', `base64_encode decode mismatch: ${JSON.stringify(b64back)}`);
+  assert.equal(b64back.is_text, true, `base64_encode is_text mismatch: ${JSON.stringify(b64back)}`);
+
+  // SVGはパーセントエンコードの方が短いので、そちらが data_uri になり HTML/CSS スニペットも付く
+  const svgRes = await callTool(
+    'base64_encode',
+    { text: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle r="10"/></svg>', dataUri: true, snippets: true },
+    15,
+  );
+  assert.equal(svgRes.data_uri_encoding, 'percent', `base64_encode svg encoding mismatch: ${JSON.stringify(svgRes)}`);
+  assert.ok(svgRes.snippets?.html.includes('width="24" height="24"'), `base64_encode svg snippet mismatch: ${JSON.stringify(svgRes.snippets)}`);
+  for (const ch of ['"', '<', '>', '&', '#', ' ']) {
+    assert.ok(!svgRes.data_uri.includes(ch), `percent-encoded SVG must not contain ${JSON.stringify(ch)}: ${svgRes.data_uri}`);
+  }
+
+  const b64Err = await request('tools/call', { name: 'base64_encode', arguments: { mode: 'decode', base64: '!!!!' } }, 16);
+  assert.ok(b64Err.result?.isError, `base64_encode should reject invalid Base64: ${JSON.stringify(b64Err)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

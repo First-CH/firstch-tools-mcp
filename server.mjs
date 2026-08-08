@@ -12,6 +12,7 @@ import { convertToWebp } from './webp.mjs';
 import { renderMarp } from './marp.mjs';
 import { diffCheck } from './diff.mjs';
 import { cronExplain } from './cron.mjs';
+import { base64Convert } from './base64.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -374,6 +375,40 @@ server.registerTool(
   async ({ expression, timeZone, count, from }) => {
     await logUsage('cron_explain');
     return asText(cronExplain(expression, { timeZone, count, from }));
+  },
+);
+
+server.registerTool(
+  'base64_encode',
+  {
+    title: 'Base64 / Data URI エンコード・デコード',
+    description:
+      'テキストやファイルを Base64・data URI へ変換し、そのまま貼れる HTML <img> / CSS background-image の' +
+      'スニペットも返す（tools.first-ch.com/base64/ と同一ロジック）。mode="decode" では Base64 や data URI を' +
+      '元のバイト列へ戻し、outputPath を渡せばファイルとして書き出す。' +
+      'アイコンやSVGのCSS埋め込み、メールHTML用の画像インライン化、APIやJWTで受け取ったBase64の中身の確認、' +
+      'ログに出てきたdata URIの復元に使う。' +
+      'SVGは base64（必ず約1.33倍になる）よりパーセントエンコードの方が小さいため両方の長さを返して短い方を既定にし、' +
+      '& " < > # % と空白・非ASCIIを必ずエスケープするのでHTML属性にもCSSの url("…") にもそのまま貼れる。' +
+      'デコードは標準/URLセーフのどちらでも、空白・改行混じりでも、パディングが欠けていても読み取り、' +
+      'data URI が名乗るMIMEタイプより実際のマジックナンバー（PNG/JPEG/GIF/WebP/ico/PDF/zip/woff/woff2/SVG）から' +
+      '判定した種類を優先する。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      mode: z.enum(['encode', 'decode']).optional().describe('既定 encode。decode は base64 を元のバイト列へ戻す'),
+      text: z.string().optional().describe('encode: 変換するテキスト（UTF-8として符号化する。path と排他）'),
+      path: z.string().optional().describe('encode: 変換するファイルの絶対パス（text と排他）'),
+      base64: z.string().optional().describe('decode: Base64本体、または data:…;base64,… の全体'),
+      outputPath: z.string().optional().describe('decode: 復元したバイト列を書き出す絶対パス（指定すると base64 は返さない）'),
+      urlSafe: z.boolean().optional().describe('encode: URLセーフ（+/ を -_ に・パディング無し）にするか（既定 false）'),
+      wrap: z.number().int().min(1).max(998).optional().describe('encode: n桁ごとに改行する（MIMEは76）'),
+      dataUri: z.boolean().optional().describe('encode: data URI も返すか（path 指定時は常に返す）'),
+      mimeType: z.string().optional().describe('encode: data URI のMIMEタイプ（未指定なら中身から判定）'),
+      snippets: z.boolean().optional().describe('encode: HTML <img> / CSS background-image のスニペットも返すか（画像のみ）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('base64_encode');
+    return asText(await base64Convert(opts));
   },
 );
 

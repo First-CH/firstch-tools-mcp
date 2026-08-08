@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { contrastCheck, countChars, analyzeEncoding, convertEncoding, detectNewline, convertNewline } from './lib.mjs';
 import { diffCheck, diffSeq, buildDiff, toUnified, splitLines } from './diff.mjs';
 import { cronExplain, parseCron, nextFires, describe as cronDescribe, CronError } from './cron.mjs';
+import {
+  base64Convert, bytesToBase64, base64ToBytes, formatBase64, parseDataUri,
+  svgPercentDataUri, sniffType, percentDecode, Base64Error,
+} from './base64.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -591,6 +595,177 @@ assert.equal(over.x_postable, false);
   const t0 = Date.now();
   cronExplain('0 0 31 2 *', { timeZone: TZ, count: 5, from: FROM });
   assert.ok(Date.now() - t0 < 5000, `存在しない日付の探索が遅すぎる: ${Date.now() - t0}ms`);
+}
+
+/* ==================== base64.mjs（tools.first-ch.com/base64/ と同一ロジック） ==================== */
+{
+  const enc = (s) => new TextEncoder().encode(s);
+
+  // RFC 4648 のテストベクタ
+  assert.equal(bytesToBase64(enc('')), '');
+  assert.equal(bytesToBase64(enc('f')), 'Zg==');
+  assert.equal(bytesToBase64(enc('fo')), 'Zm8=');
+  assert.equal(bytesToBase64(enc('foo')), 'Zm9v');
+  assert.equal(bytesToBase64(enc('foob')), 'Zm9vYg==');
+  assert.equal(bytesToBase64(enc('fooba')), 'Zm9vYmE=');
+  assert.equal(bytesToBase64(enc('foobar')), 'Zm9vYmFy');
+
+  // 日本語はUTF-8のバイト列を経由する
+  assert.equal(bytesToBase64(enc('こんにちは')), Buffer.from('こんにちは', 'utf8').toString('base64'));
+
+  // 全256バイトを往復しても壊れない（バイナリ安全）
+  const all = new Uint8Array(256).map((_, i) => i);
+  assert.deepEqual([...base64ToBytes(bytesToBase64(all))], [...all]);
+  // String.fromCharCode.apply の分割境界（0x8000）をまたいでも壊れない
+  const big = new Uint8Array(0x8000 * 2 + 7).map((_, i) => i % 251);
+  assert.equal(bytesToBase64(big), Buffer.from(big).toString('base64'));
+
+  // デコードは URLセーフ・パディング欠け・空白/改行混じりをすべて受け付ける
+  const want = [...enc('foobar?~')];
+  const std = Buffer.from('foobar?~').toString('base64');
+  assert.deepEqual([...base64ToBytes(std)], want);
+  assert.deepEqual([...base64ToBytes(std.replace(/=+$/, ''))], want);
+  assert.deepEqual([...base64ToBytes(std.replace(/\+/g, '-').replace(/\//g, '_'))], want);
+  assert.deepEqual([...base64ToBytes('Zm9v\n  YmFy\tP34=')], want);
+
+  // 壊れた入力は理由の分かる例外にする
+  assert.throws(() => base64ToBytes('!!!!'), /BAD_CHAR/);
+  assert.throws(() => base64ToBytes('Zm9vYmFyP'), /BAD_LENGTH/); // 4n+1 は存在しない長さ
+
+  // 整形: URLセーフ／76桁改行
+  const long = bytesToBase64(enc('a'.repeat(100) + '???'));
+  assert.ok(!formatBase64(long, { urlSafe: true }).includes('='));
+  assert.ok(formatBase64(long, { urlSafe: true }).includes('_'));
+  const wrapped = formatBase64(long, { wrap: 76 }).split('\n');
+  assert.ok(wrapped.slice(0, -1).every((l) => l.length === 76));
+  assert.equal(wrapped.join(''), long);
+
+  // data URI の分解（base64版・パーセント版・非data URI）
+  const du = parseDataUri('data:image/png;base64,Zm9vYmFy');
+  assert.equal(du.mimeType, 'image/png');
+  assert.equal(du.isBase64, true);
+  assert.equal(Buffer.from(du.bytes).toString(), 'foobar');
+  const pu = parseDataUri("data:image/svg+xml,%3Csvg%20a='1'/%3E");
+  assert.equal(pu.isBase64, false);
+  assert.equal(Buffer.from(pu.bytes).toString(), "<svg a='1'/>");
+  assert.equal(parseDataUri('SGVsbG8='), null);
+  // charset 付き。%XX はバイト単位で解くので非UTF-8のバイトでも壊れない
+  assert.equal(parseDataUri('data:text/plain;charset=utf-8;base64,SGk=').charset, 'utf-8');
+  assert.deepEqual([...percentDecode('%FF%00a')], [0xff, 0x00, 0x61]);
+
+  // マジックナンバーからの種類判定
+  assert.equal(sniffType(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13])).mimeType, 'image/png');
+  assert.equal(sniffType(enc('<svg xmlns="http://www.w3.org/2000/svg"/>')).mimeType, 'image/svg+xml');
+  assert.equal(sniffType(enc('<?xml version="1.0"?><svg xmlns="x"/>')).mimeType, 'image/svg+xml');
+  assert.equal(sniffType(enc('hello world!')).mimeType, 'text/plain');
+  assert.equal(sniffType(new Uint8Array([0xff, 0xfe, 0x00, 0x01, 2, 3, 4, 5, 6, 7, 8, 9])).mimeType, 'application/octet-stream');
+
+  // SVGのパーセントエンコード: HTML属性にもCSS url("…") にも貼れるよう危険な文字を必ず退避する
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle r="10" fill="#c8501f"/></svg>';
+  const uri = svgPercentDataUri(svg);
+  assert.ok(uri.startsWith('data:image/svg+xml,%3Csvg'));
+  for (const ch of ['"', '<', '>', '&', '#', ' ', '\n']) {
+    assert.ok(!uri.includes(ch), `percent-encoded SVG must not contain ${JSON.stringify(ch)}: ${uri}`);
+  }
+  // 中身は失われない（' は " の短縮置換なので元に戻して比較する）
+  assert.equal(decodeURIComponent(uri.slice('data:image/svg+xml,'.length)).replace(/'/g, '"'), svg);
+  // base64より短い（＝この置き換えに意味がある）
+  assert.ok(uri.length < ('data:image/svg+xml;base64,' + bytesToBase64(enc(svg))).length);
+  // ' を含むSVGは " を潰さない（属性値を壊さないため）
+  assert.ok(svgPercentDataUri("<svg a=\"it's\"/>").includes('%22'));
+  // <text> があるときはタグ間の空白を詰めない（語間の空白が描画に効くため）
+  assert.ok(svgPercentDataUri('<svg><text>a</text> <text>b</text></svg>').includes('%3E%20%3C'));
+  assert.ok(!svgPercentDataUri('<svg><rect/> <rect/></svg>').includes('%3E%20%3C'));
+
+  // ---- base64Convert: encode ----
+  const t = await base64Convert({ text: 'こんにちは' });
+  assert.equal(t.base64, Buffer.from('こんにちは', 'utf8').toString('base64'));
+  assert.equal(t.bytes, 15);
+  assert.equal(t.growth, '+33%');
+  assert.equal(t.data_uri, undefined); // dataUri 未指定のテキストには付けない
+
+  const tu = await base64Convert({ text: 'こんにちは', dataUri: true });
+  assert.equal(tu.data_uri, 'data:text/plain;charset=utf-8;base64,' + t.base64);
+
+  // SVGソースをテキストで渡しても画像として扱い、短いパーセント版を既定にする
+  const sv = await base64Convert({ text: svg, dataUri: true, snippets: true });
+  assert.equal(sv.mime_type, 'image/svg+xml');
+  assert.equal(sv.data_uri_encoding, 'percent');
+  assert.equal(sv.data_uri, sv.data_uri_percent);
+  assert.ok(sv.data_uri_percent.length < sv.data_uri_base64.length);
+  assert.ok(sv.snippets.html.startsWith('<img src="data:image/svg+xml,'));
+  assert.ok(sv.snippets.html.includes('width="24" height="24"'));   // width/height 属性から寸法を読む
+  assert.ok(sv.snippets.css.includes('background-image: url("data:image/svg+xml,'));
+  // width/height が無ければ viewBox から読む
+  const vb = await base64Convert({ text: '<svg xmlns="x" viewBox="0 0 48 32"/>', dataUri: true, snippets: true });
+  assert.ok(vb.snippets.html.includes('width="48" height="32"'));
+  // どちらも読めないときは寸法属性を落とし、その旨を伝える
+  const nodim = await base64Convert({ text: '<svg xmlns="x" width="100%"/>', dataUri: true, snippets: true });
+  assert.ok(!/"\s+width="/.test(nodim.snippets.html), `寸法が読めない画像に width/height を付けてはいけない: ${nodim.snippets.html}`);
+  assert.ok(!nodim.snippets.css.includes('  width:'));
+  assert.ok(nodim.snippets_note);
+
+  // URLセーフ・改行の指定
+  const us = await base64Convert({ text: 'a'.repeat(100) + '???', urlSafe: true, wrap: 76 });
+  assert.equal(us.url_safe, true);
+  assert.equal(us.wrap, 76);
+  assert.ok(!us.base64.includes('=') && us.base64.includes('_'));
+  assert.ok(us.base64.split('\n').slice(0, -1).every((l) => l.length === 76));
+
+  // ---- base64Convert: ファイル入出力 ----
+  {
+    const { mkdtemp, writeFile: wf, readFile: rf, rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const dir = await mkdtemp(join(tmpdir(), 'firstch-b64-'));
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP8z8Dwn4GBgYEJRIAAFvIC/RRXCWsAAAAASUVORK5CYII=',
+      'base64',
+    );
+    const src = join(dir, 'dot.png');
+    await wf(src, png);
+
+    // パスを渡すと data URI は常に返る。拡張子ではなく中身（マジックナンバー）で判定する
+    const f = await base64Convert({ path: src, snippets: true });
+    assert.equal(f.mime_type, 'image/png');
+    assert.equal(f.bytes, png.length);
+    assert.equal(f.source.name, 'dot.png');
+    assert.equal(f.data_uri, 'data:image/png;base64,' + png.toString('base64'));
+    assert.equal(f.data_uri_encoding, undefined); // PNGにパーセント版は無い
+    assert.ok(f.snippets.html.startsWith('<img src="data:image/png;base64,'));
+
+    // decode → 同じバイト列がファイルへ戻る
+    const out = join(dir, 'out.png');
+    const d = await base64Convert({ mode: 'decode', base64: f.data_uri, outputPath: out });
+    assert.equal(d.mime_type, 'image/png');
+    assert.equal(d.bytes, png.length);
+    assert.equal(d.is_text, false);
+    assert.equal(d.output, out);
+    assert.equal(d.base64, undefined); // ファイルに書いたら base64 は返さない
+    assert.deepEqual([...(await rf(out))], [...png]);
+
+    await rm(dir, { recursive: true, force: true });
+  }
+
+  // ---- base64Convert: decode ----
+  const dt = await base64Convert({ mode: 'decode', base64: 'data:text/plain;base64,44GT44KT44Gr44Gh44Gv' });
+  assert.equal(dt.text, 'こんにちは');
+  assert.equal(dt.is_text, true);
+  assert.equal(dt.mime_type, 'text/plain');
+  assert.equal(dt.suggested_extension, 'txt');
+  // 素のBase64でも、パディングが欠けていても、URLセーフでも読める
+  assert.equal((await base64Convert({ mode: 'decode', base64: 'SGVsbG8' })).text, 'Hello');
+  // data URI の名乗りより中身を優先する（宣言のずれたコピペを拾わない）
+  const lie = await base64Convert({ mode: 'decode', base64: 'data:text/plain;base64,' + Buffer.from([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13]).toString('base64') });
+  assert.equal(lie.mime_type, 'image/png');
+  assert.equal(lie.declared_mime_type, 'text/plain');
+
+  // 入力の取り違えは Base64Error で弾く
+  await assert.rejects(() => base64Convert({ mode: 'decode', base64: '!!!!' }), Base64Error);
+  await assert.rejects(() => base64Convert({ mode: 'decode' }), Base64Error);
+  await assert.rejects(() => base64Convert({}), Base64Error);                                  // text も path も無い
+  await assert.rejects(() => base64Convert({ text: 'a', path: '/tmp/x' }), Base64Error);       // 両方はだめ
+  await assert.rejects(() => base64Convert({ mode: 'bogus', text: 'a' }), Base64Error);
 }
 
 console.log('all tests passed');
