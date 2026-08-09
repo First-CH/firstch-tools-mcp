@@ -66,6 +66,7 @@ try {
     'llmstxt_generate',
     'marp_render',
     'testdata_generate',
+    'url_params',
     'webp_convert',
   ];
   assert.deepEqual(names, expected, `unexpected tool list: ${JSON.stringify(names)}`);
@@ -177,6 +178,31 @@ try {
 
   const b64Err = await request('tools/call', { name: 'base64_encode', arguments: { mode: 'decode', base64: '!!!!' } }, 16);
   assert.ok(b64Err.result?.isError, `base64_encode should reject invalid Base64: ${JSON.stringify(b64Err)}`);
+
+  // url_params: 無編集の再構築が1バイトも変わらないこと（MCP越しでも生の値を保つ）
+  const signed = 'https://e.com/f.jpg?Expires=1&Signature=aB%2Fc%3D&q=a+b';
+  const up = await callTool('url_params', { url: signed }, 17);
+  assert.equal(up.url, signed, `url_params must not rewrite an untouched URL: ${JSON.stringify(up)}`);
+  assert.equal(up.params.at(-1).value, 'a b', `url_params should decode + as a space: ${JSON.stringify(up.params)}`);
+
+  // UTM付与とクリックID削除
+  const utmRes = await callTool(
+    'url_params',
+    { url: 'https://e.com/lp/?gclid=EAIa', utm: { source: 'newsletter', medium: 'email' }, removeTracking: true },
+    18,
+  );
+  assert.equal(
+    utmRes.url,
+    'https://e.com/lp/?utm_source=newsletter&utm_medium=email',
+    `url_params utm/removeTracking mismatch: ${JSON.stringify(utmRes)}`,
+  );
+  assert.deepEqual(utmRes.removed, ['gclid'], `url_params removed mismatch: ${JSON.stringify(utmRes)}`);
+
+  const encRes = await callTool('url_params', { mode: 'encode', text: '検索 語' }, 19);
+  assert.equal(encRes.output, encodeURIComponent('検索 語'), `url_params encode mismatch: ${JSON.stringify(encRes)}`);
+
+  const urlErr = await request('tools/call', { name: 'url_params', arguments: {} }, 20);
+  assert.ok(urlErr.result?.isError, `url_params should reject a missing url: ${JSON.stringify(urlErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

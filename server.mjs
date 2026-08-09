@@ -13,6 +13,7 @@ import { renderMarp } from './marp.mjs';
 import { diffCheck } from './diff.mjs';
 import { cronExplain } from './cron.mjs';
 import { base64Convert } from './base64.mjs';
+import { urlParams } from './url.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -409,6 +410,51 @@ server.registerTool(
   async (opts) => {
     await logUsage('base64_encode');
     return asText(await base64Convert(opts));
+  },
+);
+
+server.registerTool(
+  'url_params',
+  {
+    title: 'URLパラメータの分解・編集・再構築',
+    description:
+      'URLのクエリ文字列をキーと値へ分解し、編集・追加・削除・並べ替えをして再構築する' +
+      '（tools.first-ch.com/url/ と同一ロジック）。UTMタグの付与、gclid等のクリックIDの一括削除、' +
+      '文字列単体のURLエンコード/デコード（mode="encode" / "decode"）もできる。' +
+      'リダイレクトURLやAPI引数の中身の確認、計測用URLの作成、共有前のクエリの掃除に使う。' +
+      '値はデコードして返し（%XX を元の文字へ、+ を半角スペースへ）、編集していないパラメータは' +
+      '生の文字列のまま書き戻すため、何も指定しなければ再構築後のURLは入力と1バイトも変わらない' +
+      '（署名付きURLを通しても壊れない）。reencode=true で全体を encodeURIComponent の規則へ正規化する。' +
+      '重複キー・未エンコードのスペースや非ASCII・壊れた %XX・+ のスペース解釈・UTM値の大文字混在や' +
+      'source/mediumの片落ち・URL内のパスワード・トークンらしきキー・2000文字超を warnings で知らせる。' +
+      '相対パスや壊れたパーセントエンコードでも例外にせず、読める範囲まで分解する。' +
+      '完全ローカル処理・ネットワーク送信なし（URLへのアクセスは行わない）。',
+    inputSchema: {
+      url: z.string().optional().describe('mode="parse": 分解するURL（相対パス・部分的なURLも可）'),
+      mode: z
+        .enum(['parse', 'encode', 'decode'])
+        .optional()
+        .describe('既定 parse。encode/decode は url ではなく text を対象にする'),
+      text: z.string().optional().describe('mode="encode"/"decode": 対象の文字列'),
+      scheme: z
+        .enum(['component', 'uri', 'form'])
+        .optional()
+        .describe('encode/decode の方式（既定 component=encodeURIComponent / uri=encodeURI / form=スペースを +）'),
+      set: z.record(z.string()).optional().describe('parse: 追加・上書きするパラメータ（値が空文字なら削除）'),
+      remove: z.array(z.string()).optional().describe('parse: 削除するパラメータ名（大文字小文字を無視）'),
+      utm: z
+        .record(z.string())
+        .optional()
+        .describe('parse: UTMタグ。source / medium / campaign / content / term / id（utm_ 付きでも可）'),
+      removeTracking: z.boolean().optional().describe('parse: gclid・fbclid 等のクリックIDを一括削除する'),
+      sort: z.boolean().optional().describe('parse: パラメータを名前順に並べ替える'),
+      reencode: z.boolean().optional().describe('parse: 全パラメータを encodeURIComponent の規則で書き直す'),
+      spaceAsPlus: z.boolean().optional().describe('parse: 新たにエンコードする値のスペースを %20 ではなく + にする'),
+    },
+  },
+  async (opts) => {
+    await logUsage('url_params');
+    return asText(urlParams(opts));
   },
 );
 

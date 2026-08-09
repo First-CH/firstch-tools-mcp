@@ -7,6 +7,10 @@ import {
   base64Convert, bytesToBase64, base64ToBytes, formatBase64, parseDataUri,
   svgPercentDataUri, sniffType, percentDecode, Base64Error,
 } from './base64.mjs';
+import {
+  urlParams, splitUrl, urlParts, parseQuery, buildQuery, buildUrl,
+  decodeComponent, encodeComponent, setParam, removeParams, getUtm, analyzeUrl, UrlParamsError,
+} from './url.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -766,6 +770,141 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => base64Convert({}), Base64Error);                                  // text も path も無い
   await assert.rejects(() => base64Convert({ text: 'a', path: '/tmp/x' }), Base64Error);       // 両方はだめ
   await assert.rejects(() => base64Convert({ mode: 'bogus', text: 'a' }), Base64Error);
+}
+
+/* ==================== url.mjs（tools.first-ch.com/url/ と同一ロジック） ==================== */
+{
+  // ---- splitUrl: # → ? の順に切る。値の中の ? はクエリの一部として残す ----
+  const s1 = splitUrl('https://e.com/a?b=1&c=2#frag');
+  assert.equal(s1.base, 'https://e.com/a');
+  assert.equal(s1.query, 'b=1&c=2');
+  assert.equal(s1.hash, 'frag');
+  const s2 = splitUrl('https://e.com/a?r=https://x.com/p?q=1');
+  assert.equal(s2.query, 'r=https://x.com/p?q=1', '2つ目以降の ? は値の一部');
+  const s3 = splitUrl('/path/only');
+  assert.equal(s3.base, '/path/only');
+  assert.equal(s3.hasQuery, false);
+
+  // ---- urlParts: スキーム無しは https を仮定・相対パスは null ----
+  assert.equal(urlParts('https://e.com:8443/a/b').port, '8443');
+  assert.equal(urlParts('example.com/a').assumedProtocol, true);
+  assert.equal(urlParts('example.com/a').hostname, 'example.com');
+  assert.equal(urlParts('/only/path'), null);
+  assert.equal(urlParts('https://u:p@e.com/').hasPassword, true);
+
+  // ---- parseQuery: + はスペース・= 無しのキーも拾う・空トークンは捨てる ----
+  const rows = parseQuery('a=1&b&c=%E6%97%A5+%E6%9C%AC&&d=');
+  assert.equal(rows.length, 4);
+  assert.equal(rows[1].hasEq, false);
+  assert.equal(rows[2].value, '日 本');
+  assert.equal(rows[3].value, '');
+
+  // 壊れた %XX でも投げず、読める範囲まで戻す
+  assert.equal(parseQuery('a=100%').at(0).value, '100%');
+  assert.equal(decodeComponent('%E6%97%A5%'), '日%');
+
+  // ---- buildQuery: 未編集の行は生のまま（無編集の再構築は入力と完全一致） ----
+  const raw = 'utm_source=Google&q=a+b&e=%2F%2F';
+  assert.equal(buildQuery(parseQuery(raw), {}), raw, '触っていなければ1バイトも変わらない');
+  const signed = 'https://e.com/f.jpg?Expires=1&Signature=aB%2Fc%3D&Key-Pair-Id=K1';
+  assert.equal(
+    buildUrl({ base: splitUrl(signed).base, query: buildQuery(parseQuery(splitUrl(signed).query), {}) }),
+    signed,
+    '署名付きURLは通しても壊れない',
+  );
+
+  // 編集した行だけ再エンコードされる
+  const edited = parseQuery(raw);
+  edited[1].value = 'x&y z';
+  assert.equal(buildQuery(edited, {}), 'utm_source=Google&q=x%26y%20z&e=%2F%2F');
+  // reencode は全体を正規化し、spaceAsPlus はスペースを + にする
+  assert.equal(buildQuery(parseQuery('a=1+2'), { reencode: true }), 'a=1%202');
+  assert.equal(buildQuery(parseQuery('a=1+2'), { reencode: true, spaceAsPlus: true }), 'a=1+2');
+  // 無効化した行と空行は落ちる
+  const off = parseQuery('a=1&b=2');
+  off[0].on = false;
+  assert.equal(buildQuery(off, {}), 'b=2');
+
+  // ---- setParam / removeParams / getUtm ----
+  const r2 = parseQuery('a=1&utm_source=x');
+  setParam(r2, 'utm_source', 'y');
+  setParam(r2, 'utm_medium', 'email');
+  assert.equal(buildQuery(r2, {}), 'a=1&utm_source=y&utm_medium=email');
+  setParam(r2, 'a', '');
+  assert.equal(buildQuery(r2, {}), 'utm_source=y&utm_medium=email', '空文字を渡すと削除');
+  assert.deepEqual(getUtm(r2), { utm_source: 'y', utm_medium: 'email' });
+  assert.equal(buildQuery(removeParams(parseQuery('a=1&GCLID=x'), ['gclid']), {}), 'a=1', '大文字小文字を無視して削除');
+
+  // ---- analyzeUrl ----
+  const codes = (u) => {
+    const sp = splitUrl(u);
+    const rs = parseQuery(sp.query);
+    return analyzeUrl({ rows: rs, parts: urlParts(sp.base), url: u, hasHash: sp.hasHash, hash: sp.hash }).map((w) => w.code);
+  };
+  assert.ok(codes('https://e.com/?a=1&a=2').includes('dup'));
+  assert.ok(codes('https://e.com/?a=1 2').includes('raw_space'));
+  assert.ok(codes('https://e.com/?a=100%zz').includes('bad_percent'));
+  assert.ok(codes('https://e.com/?a=x+y').includes('plus_space'));
+  assert.ok(codes('https://e.com/?token=abc').includes('secret'));
+  assert.ok(codes('https://e.com/?gclid=abc').includes('click_id'));
+  assert.ok(codes('https://e.com/?utm_source=Google&utm_medium=cpc').includes('utm_case'));
+  assert.ok(codes('https://e.com/?utm_source=g').includes('utm_no_medium'));
+  assert.ok(codes('https://e.com/?utm_medium=email').includes('utm_no_source'));
+  assert.ok(codes('http://e.com/?a=1').includes('http'));
+  assert.ok(codes('https://u:p@e.com/?a=1').includes('userinfo'));
+  assert.ok(codes('https://e.com/?a=1#/x?y=2').includes('hash_query'));
+  assert.ok(codes('https://e.com/?a=' + 'x'.repeat(2100)).includes('long_url'));
+  assert.deepEqual(codes('https://e.com/?a=1&b=2'), [], '素直なURLでは何も出ない');
+
+  // ---- urlParams（MCPの入口） ----
+  const p1 = urlParams({ url: 'https://e.com/p?utm_source=Google&gclid=EAIa&q=a+b' });
+  assert.equal(p1.url, 'https://e.com/p?utm_source=Google&gclid=EAIa&q=a+b');
+  assert.equal(p1.changed, false);
+  assert.equal(p1.hostname, 'e.com');
+  assert.equal(p1.path, '/p');
+  assert.equal(p1.params.length, 3);
+  assert.equal(p1.params[2].value, 'a b');
+  assert.equal(p1.stats.params, 3);
+  assert.deepEqual(p1.utm, { utm_source: 'Google' });
+  assert.ok(p1.warnings.some((w) => w.code === 'click_id' && w.message_ja.includes('gclid')));
+
+  // クリックID削除 + 並べ替え
+  const p2 = urlParams({ url: 'https://e.com/p?z=1&gclid=x&a=2', removeTracking: true, sort: true });
+  assert.equal(p2.url, 'https://e.com/p?a=2&z=1');
+  assert.deepEqual(p2.removed, ['gclid']);
+  assert.equal(p2.changed, true);
+
+  // UTM付与（source / utm_source のどちらの書き方も受ける）
+  const p3 = urlParams({ url: 'https://e.com/lp/', utm: { source: 'newsletter', utm_medium: 'email', campaign: '2026-08' } });
+  assert.equal(p3.url, 'https://e.com/lp/?utm_source=newsletter&utm_medium=email&utm_campaign=2026-08');
+  assert.deepEqual(p3.utm, { utm_source: 'newsletter', utm_medium: 'email', utm_campaign: '2026-08' });
+
+  // set / remove とフラグメントの保持
+  const p4 = urlParams({ url: 'https://e.com/p?a=1&b=2#sec', set: { c: '日本' }, remove: ['a'] });
+  assert.equal(p4.url, 'https://e.com/p?b=2&c=%E6%97%A5%E6%9C%AC#sec');
+  assert.equal(p4.hash, 'sec');
+
+  // 相対パス・スキーム無しでも例外にしない
+  assert.equal(urlParams({ url: '/a/b?x=1' }).url, '/a/b?x=1');
+  assert.equal(urlParams({ url: 'example.com/a?x=1' }).assumed_protocol, true);
+
+  // encode / decode
+  assert.equal(urlParams({ mode: 'encode', text: 'a b&c' }).output, 'a%20b%26c');
+  assert.equal(urlParams({ mode: 'encode', text: 'a b&c', scheme: 'form' }).output, 'a+b%26c');
+  assert.equal(urlParams({ mode: 'encode', text: 'https://e.com/a b', scheme: 'uri' }).output, 'https://e.com/a%20b');
+  // component は encodeURIComponent の逆なので + はそのまま。form（クエリの流儀）だけ + を空白へ戻す
+  assert.equal(urlParams({ mode: 'decode', text: '%E6%97%A5+%E6%9C%AC' }).output, '日+本');
+  assert.equal(urlParams({ mode: 'decode', text: '%E6%97%A5+%E6%9C%AC', scheme: 'form' }).output, '日 本');
+  // 壊れた %XX でも投げず、読める範囲まで戻す
+  assert.equal(urlParams({ mode: 'decode', text: '%E6%97%A5%' }).output, '日%');
+
+  // 入力の取り違えは UrlParamsError で弾く
+  assert.throws(() => urlParams({}), UrlParamsError);
+  assert.throws(() => urlParams({ url: '   ' }), UrlParamsError);
+  assert.throws(() => urlParams({ mode: 'encode' }), UrlParamsError);
+  assert.throws(() => urlParams({ mode: 'bogus', text: 'a' }), UrlParamsError);
+  assert.throws(() => urlParams({ url: 'https://e.com/', scheme: 'bogus' }), UrlParamsError);
+  assert.throws(() => urlParams({ url: 'https://e.com/', utm: { bogus: 'x' } }), UrlParamsError);
 }
 
 console.log('all tests passed');
