@@ -14,6 +14,7 @@ import { diffCheck } from './diff.mjs';
 import { cronExplain } from './cron.mjs';
 import { base64Convert } from './base64.mjs';
 import { urlParams } from './url.mjs';
+import { htmlEscape } from './html-escape.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -455,6 +456,42 @@ server.registerTool(
   async (opts) => {
     await logUsage('url_params');
     return asText(urlParams(opts));
+  },
+);
+
+server.registerTool(
+  'html_escape',
+  {
+    title: 'HTML特殊文字のエスケープ・エンティティのデコード',
+    description:
+      'テキスト中の < > & " \' をHTMLエンティティへ変換し、逆に &amp; &#39; &#x3042; などの文字参照を' +
+      '元の文字へ戻す（tools.first-ch.com/html-escape/ と同一ロジック）。' +
+      '記事やコード例へHTMLをそのまま載せる、テンプレートへ差し込む値を安全にする、' +
+      'スクレイピングやAPIで受け取ったエンティティ混じりのテキストを読める形に戻す、といった用途に使う。' +
+      'エスケープは & を最初に処理するため何度実行しても二重エスケープにならず、' +
+      '名前付き参照と数値文字参照（10進・16進）を切り替えられる。' +
+      'デコードはHTML 4.01の名前付き文字参照252個すべてと10進/16進に対応し、' +
+      '知らない名前や範囲外の数値は推測で変換せずそのまま残して notes で知らせる。' +
+      '&#128; のようなC1領域の数値参照はHTML仕様どおり Windows-1252 の文字（€）へ読み替える。' +
+      'すでにエスケープ済みの入力・裸の &・セミコロンで閉じていない参照・ノーブレークスペース(U+00A0)の' +
+      '混入も notes で指摘する。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      mode: z.enum(['escape', 'unescape']).optional().describe('既定 escape。unescape はエンティティを元の文字へ戻す'),
+      text: z.string().optional().describe('対象のテキスト（path と排他）'),
+      path: z.string().optional().describe('対象ファイルの絶対パス（UTF-8として読む。text と排他）'),
+      outputPath: z.string().optional().describe('結果を書き出す絶対パス（指定すると text は返さない）'),
+      quotes: z.boolean().optional().describe('escape: " と \' も変換するか（既定 true。属性値へ入れるなら必須）'),
+      apos: z.boolean().optional().describe("escape: ' を &apos; にするか（既定 false=&#39;。&apos; はHTML 4.01に無い）"),
+      numeric: z.boolean().optional().describe('escape: 名前ではなく数値文字参照（&#38; 形式）で出力するか（既定 false）'),
+      nonAscii: z
+        .enum(['none', 'named', 'decimal', 'hex'])
+        .optional()
+        .describe('escape: 非ASCII文字の扱い（既定 none。文字コードが伝わらない経路へ渡すなら decimal/hex）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('html_escape');
+    return asText(await htmlEscape(opts));
   },
 );
 

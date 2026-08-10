@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 11 registered tools, and `tools/call` actually executes handlers
+// returns all 13 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain / base64_encode) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
@@ -62,6 +62,7 @@ try {
     'cron_explain',
     'diff_check',
     'encoding_convert',
+    'html_escape',
     'jsonld_generate',
     'llmstxt_generate',
     'marp_render',
@@ -203,6 +204,24 @@ try {
 
   const urlErr = await request('tools/call', { name: 'url_params', arguments: {} }, 20);
   assert.ok(urlErr.result?.isError, `url_params should reject a missing url: ${JSON.stringify(urlErr)}`);
+
+
+  // html_escape: エスケープ → デコードの往復がMCP越しでも壊れないこと
+  const esc = await callTool('html_escape', { text: `<a href='/x'>5 & 10</a>` }, 21);
+  assert.equal(
+    esc.text,
+    '&lt;a href=&#39;/x&#39;&gt;5 &amp; 10&lt;/a&gt;',
+    `html_escape mismatch: ${JSON.stringify(esc)}`,
+  );
+  const unesc = await callTool('html_escape', { mode: 'unescape', text: esc.text }, 22);
+  assert.equal(unesc.text, `<a href='/x'>5 & 10</a>`, `html_escape unescape mismatch: ${JSON.stringify(unesc)}`);
+  assert.ok(
+    unesc.notes.some((n) => n.code === 'HAS_TAGS'),
+    `html_escape should flag decoded markup: ${JSON.stringify(unesc.notes)}`,
+  );
+
+  const escErr = await request('tools/call', { name: 'html_escape', arguments: {} }, 23);
+  assert.ok(escErr.result?.isError, `html_escape should reject a missing text/path: ${JSON.stringify(escErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

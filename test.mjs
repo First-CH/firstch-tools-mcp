@@ -11,6 +11,7 @@ import {
   urlParams, splitUrl, urlParts, parseQuery, buildQuery, buildUrl,
   decodeComponent, encodeComponent, setParam, removeParams, getUtm, analyzeUrl, UrlParamsError,
 } from './url.mjs';
+import { htmlEscape, escapeHtml, unescapeHtml, htmlEscapeConvert, HtmlEscapeError } from './html-escape.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -905,6 +906,96 @@ assert.equal(over.x_postable, false);
   assert.throws(() => urlParams({ mode: 'bogus', text: 'a' }), UrlParamsError);
   assert.throws(() => urlParams({ url: 'https://e.com/', scheme: 'bogus' }), UrlParamsError);
   assert.throws(() => urlParams({ url: 'https://e.com/', utm: { bogus: 'x' } }), UrlParamsError);
+}
+
+// ---- html-escape.mjs（HTMLエスケープ / エンティティのデコード） ----
+{
+  // 基本の5文字。' は既定で &#39;（&apos; はHTML 4.01に無い）
+  assert.equal(escapeHtml(`<a href='x'>a & b</a>"q"`).text, '&lt;a href=&#39;x&#39;&gt;a &amp; b&lt;/a&gt;&quot;q&quot;');
+  assert.equal(escapeHtml("it's", { apos: true }).text, 'it&apos;s');
+  assert.equal(escapeHtml('<&>', { numeric: true }).text, '&#60;&#38;&#62;');
+  assert.equal(escapeHtml(`"'`, { quotes: false }).text, `"'`);
+
+  // & を最初に処理するので、平文を2回エスケープしても壊れない形になる（1回目が正しい形のまま）
+  assert.equal(escapeHtml('a & b').text, 'a &amp; b');
+  assert.equal(escapeHtml(escapeHtml('a & b').text).text, 'a &amp;amp; b');
+
+  // U+00A0 は見えないので常に参照へ倒す
+  assert.equal(escapeHtml('a\u00a0b').text, 'a&nbsp;b');
+  assert.equal(escapeHtml('a\u00a0b', { numeric: true }).text, 'a&#160;b');
+
+  // 非ASCII
+  assert.equal(escapeHtml('あ©', { nonAscii: 'decimal' }).text, '&#12354;&#169;');
+  assert.equal(escapeHtml('あ©', { nonAscii: 'hex' }).text, '&#x3042;&#xA9;');
+  assert.equal(escapeHtml('あ©', { nonAscii: 'named' }).text, '&#12354;&copy;');
+  // サロゲートペアが割れない（コードポイント単位で回している）
+  assert.equal(escapeHtml('😀', { nonAscii: 'hex' }).text, '&#x1F600;');
+  assert.equal(escapeHtml('日本語').text, '日本語');
+
+  // デコード: 名前付き・10進・16進
+  assert.equal(unescapeHtml('&lt;p&gt;5 &amp;lt; 10&lt;/p&gt;').text, '<p>5 &lt; 10</p>');
+  assert.equal(unescapeHtml('&#12354;&#x3042;&hearts;&Omega;').text, 'ああ♥Ω');
+  // C1領域はHTML仕様どおり Windows-1252 へ読み替える（&#128; は U+0080 ではなく €）
+  assert.equal(unescapeHtml('&#128;&#147;').text, '€“');
+  // 知らない名前・範囲外の数値・セミコロン無しは変換せず残す
+  const u = unescapeHtml('&foo; &#999999999; &bar &amp;');
+  assert.equal(u.text, '&foo; &#999999999; &bar &');
+  assert.deepEqual(u.unknown, ['&foo;']);
+  assert.deepEqual(u.invalid, ['&#999999999;']);
+  // 不正なコードポイントは U+FFFD（仕様どおり）
+  assert.equal(unescapeHtml('&#0;&#xD800;').text, '\uFFFD\uFFFD');
+  // 往復（既定オプションで戻ること）
+  const round = 'タグ <b> と & と " と \' と \u00a0';
+  assert.equal(unescapeHtml(escapeHtml(round).text).text, round);
+
+  // 指摘事項
+  const codes = (r) => r.notes.map((n) => n.code);
+  assert.ok(codes(htmlEscapeConvert({ mode: 'escape', text: 'a &amp; b' })).includes('DOUBLE_ESCAPE'));
+  assert.ok(codes(htmlEscapeConvert({ mode: 'escape', text: 'a\u00a0b' })).includes('HAS_NBSP'));
+  assert.ok(codes(htmlEscapeConvert({ mode: 'escape', text: 'plain' })).includes('NOTHING_TO_ESCAPE'));
+  assert.ok(codes(htmlEscapeConvert({ mode: 'unescape', text: '&bar' })).includes('MISSING_SEMICOLON'));
+  assert.ok(codes(htmlEscapeConvert({ mode: 'unescape', text: 'a & b' })).includes('BARE_AMP'));
+  assert.ok(codes(htmlEscapeConvert({ mode: 'unescape', text: '&lt;b&gt;' })).includes('HAS_TAGS'));
+  // セミコロン無しの参照らしき文字列は BARE_AMP で二重に数えない
+  assert.ok(!codes(htmlEscapeConvert({ mode: 'unescape', text: '&bar' })).includes('BARE_AMP'));
+
+  // 件数
+  const c = htmlEscapeConvert({ mode: 'escape', text: '<a> & <b>' });
+  assert.equal(c.changed, 5);
+  assert.deepEqual(c.counts, { amp: 1, lt: 2, gt: 2, quot: 0, apos: 0, nbsp: 0, nonAscii: 0 });
+}
+
+// html_escape（MCPの入口・ファイル入出力を含む）
+{
+  const r = await htmlEscape({ text: '<b>a & b</b>' });
+  assert.equal(r.text, '&lt;b&gt;a &amp; b&lt;/b&gt;');
+  assert.equal(r.mode, 'escape');
+  assert.deepEqual(r.source, { type: 'text' });
+  assert.equal(r.options.non_ascii, 'none');
+
+  const back = await htmlEscape({ mode: 'unescape', text: r.text });
+  assert.equal(back.text, '<b>a & b</b>');
+  assert.ok(back.notes.every((n) => typeof n.message === 'string' && n.message.length > 0));
+
+  // ファイル入出力
+  const { mkdtemp, writeFile: wf, readFile: rf } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'firstch-html-escape-'));
+  const src = join(dir, 'in.txt');
+  const dst = join(dir, 'out.html');
+  await wf(src, '5 < 10 & 3 > 1', 'utf8');
+  const fileRes = await htmlEscape({ path: src, outputPath: dst });
+  assert.equal(fileRes.text, undefined);
+  assert.equal(fileRes.output, dst);
+  assert.equal(fileRes.source.name, 'in.txt');
+  assert.equal(await rf(dst, 'utf8'), '5 &lt; 10 &amp; 3 &gt; 1');
+
+  // 入力の取り違えは HtmlEscapeError で弾く
+  await assert.rejects(() => htmlEscape({}), HtmlEscapeError);
+  await assert.rejects(() => htmlEscape({ text: 'a', path: '/tmp/x' }), HtmlEscapeError);
+  await assert.rejects(() => htmlEscape({ text: 'a', mode: 'bogus' }), HtmlEscapeError);
+  await assert.rejects(() => htmlEscape({ text: 'a', nonAscii: 'bogus' }), HtmlEscapeError);
 }
 
 console.log('all tests passed');
