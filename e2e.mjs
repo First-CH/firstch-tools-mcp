@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 13 registered tools, and `tools/call` actually executes handlers
-// (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain / base64_encode) and returns the expected values — this catches
+// returns all 15 registered tools, and `tools/call` actually executes handlers
+// (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
+// base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -63,12 +64,14 @@ try {
     'diff_check',
     'encoding_convert',
     'html_escape',
+    'json_to_yaml',
     'jsonld_generate',
     'llmstxt_generate',
     'marp_render',
     'testdata_generate',
     'url_params',
     'webp_convert',
+    'yaml_to_json',
   ];
   assert.deepEqual(names, expected, `unexpected tool list: ${JSON.stringify(names)}`);
 
@@ -222,6 +225,43 @@ try {
 
   const escErr = await request('tools/call', { name: 'html_escape', arguments: {} }, 23);
   assert.ok(escErr.result?.isError, `html_escape should reject a missing text/path: ${JSON.stringify(escErr)}`);
+
+  // json_to_yaml / yaml_to_json: 往復がMCP越しでも壊れないこと。値が別の型に読まれる形
+  // （0755 / yes）は引用符が付いて出ることまで見る
+  const y = await callTool('json_to_yaml', { text: '{"mode":"0755","flag":"yes","ports":["80:80"]}' }, 24);
+  assert.equal(
+    y.text,
+    "mode: '0755'\nflag: 'yes'\nports:\n  - 80:80\n",
+    `json_to_yaml mismatch: ${JSON.stringify(y.text)}`,
+  );
+
+  const j = await callTool('yaml_to_json', { text: y.text, indent: 0 }, 25);
+  assert.equal(
+    j.text.trim(),
+    '{"mode":"0755","flag":"yes","ports":["80:80"]}',
+    `yaml_to_json round-trip mismatch: ${JSON.stringify(j.text)}`,
+  );
+
+  // 複数ドキュメントは配列になり、意味が変わる箇所は notes で返る
+  const multi = await callTool('yaml_to_json', { text: 'a: 0755\n---\nb: 2\n', indent: 0 }, 26);
+  assert.equal(multi.documents, 2, `yaml_to_json documents mismatch: ${JSON.stringify(multi)}`);
+  assert.equal(multi.text.trim(), '[{"a":755},{"b":2}]', `yaml_to_json multi-doc mismatch: ${JSON.stringify(multi.text)}`);
+  assert.ok(
+    multi.notes.some((n) => n.code === 'YAML_LEADING_ZERO' && n.message),
+    `yaml_to_json should flag a leading zero: ${JSON.stringify(multi.notes)}`,
+  );
+
+  // 構文エラーは isError で返し、メッセージに行・桁が入っていること
+  const yamlErr = await request('tools/call', { name: 'yaml_to_json', arguments: { text: 'a: 1\n\tb: 2\n' } }, 27);
+  assert.ok(yamlErr.result?.isError, `yaml_to_json should reject tab indentation: ${JSON.stringify(yamlErr)}`);
+  assert.match(
+    yamlErr.result?.content?.[0]?.text || '',
+    /TAB_INDENT/,
+    `yaml_to_json error should name the cause: ${JSON.stringify(yamlErr.result)}`,
+  );
+
+  const jyErr = await request('tools/call', { name: 'json_to_yaml', arguments: {} }, 28);
+  assert.ok(jyErr.result?.isError, `json_to_yaml should reject a missing text/path: ${JSON.stringify(jyErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

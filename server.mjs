@@ -15,6 +15,7 @@ import { cronExplain } from './cron.mjs';
 import { base64Convert } from './base64.mjs';
 import { urlParams } from './url.mjs';
 import { htmlEscape } from './html-escape.mjs';
+import { jsonToYaml, yamlToJson } from './json-yaml.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -492,6 +493,89 @@ server.registerTool(
   async (opts) => {
     await logUsage('html_escape');
     return asText(await htmlEscape(opts));
+  },
+);
+
+// JSON ⇄ YAML は「入力の形式」ごとに別ツールにしている（direction を間違えると
+// 何も変換されないまま返ってしまうため、名前で向きが決まる方が誤用しにくい）。
+const JSON_YAML_SHARED =
+  '変換は完全ローカル処理・ネットワーク送信なし。text か path のどちらか一方を渡す。' +
+  'outputPath を渡すとファイルへ書き出す（本文は返さない）。' +
+  '構文エラーのときは「何行何桁・原因・直し方」と、その前後2行の抜き出しをエラーとして返すので、' +
+  '設定ファイルの構文チェックにも使える。' +
+  '読み替えで意味が変わる箇所は notes で知らせる（キーの重複＝後が勝つ・2の53乗を超える整数の桁落ちなど）。';
+
+server.registerTool(
+  'json_to_yaml',
+  {
+    title: 'JSON → YAML 変換・整形',
+    description:
+      'JSONをYAMLへ変換して整形する（tools.first-ch.com/json-yaml/ と同一ロジック）。' +
+      'APIレスポンスやテンプレートの出力を docker-compose・GitHub Actions・Kubernetes マニフェストのような' +
+      '設定ファイルへ写すときに使う。インデント幅・引用符の付け方・null の書き方・複数行文字列を' +
+      'ブロックスカラー（|）で書くか・キーを名前順に並べるか・先頭に --- を付けるかを選べる。' +
+      '別の型に読まれうる文字列（yes / no / on / off / 0755 / 12:30 / 2026-08-12 / 数値に見える文字列）、' +
+      '前後に空白がある文字列、- や * や # で始まる文字列は自動で引用符を付けるので、' +
+      'YAML 1.1 のパーサ（PyYAMLなど）に渡しても意味が変わらない。' +
+      '改行を含む文字列は | のブロック表記にし、行末の空白など復元できない形のときだけ "…" に倒す。' +
+      'コメント・末尾カンマ・シングルクォート・引用符なしのキーを含むJSON（tsconfig.json など）も' +
+      '読み取って変換し、JSONとしては不正であることを notes で知らせる（relaxed=false で厳密に拒否できる）。' +
+      JSON_YAML_SHARED,
+    inputSchema: {
+      text: z.string().optional().describe('変換するJSON（path と排他）'),
+      path: z.string().optional().describe('変換するJSONファイルの絶対パス（UTF-8として読む。text と排他）'),
+      outputPath: z.string().optional().describe('YAMLを書き出す絶対パス（指定すると text は返さない）'),
+      indent: z.number().int().min(1).max(8).optional().describe('YAMLのインデント幅（既定2）'),
+      quote: z
+        .enum(['auto', 'single', 'double'])
+        .optional()
+        .describe("引用符の付け方（既定 auto=必要なときだけ / single='…' / double=\"…\"）"),
+      nullStyle: z.enum(['null', 'tilde', 'empty']).optional().describe('null の書き方（既定 null / tilde=~ / empty=空欄）'),
+      block: z.boolean().optional().describe('改行を含む文字列を | のブロック表記で書くか（既定 true）'),
+      sortKeys: z.boolean().optional().describe('キーを名前順に並べるか（既定 false=入力の順）'),
+      docStart: z.boolean().optional().describe('先頭に --- を付けるか（既定 false）'),
+      relaxed: z.boolean().optional().describe('コメント・末尾カンマ等を含むJSONも読むか（既定 true）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('json_to_yaml');
+    return asText(await jsonToYaml(opts));
+  },
+);
+
+server.registerTool(
+  'yaml_to_json',
+  {
+    title: 'YAML → JSON 変換・構文チェック',
+    description:
+      'YAMLをJSONへ変換する（tools.first-ch.com/json-yaml/ と同一ロジック）。' +
+      'docker-compose・GitHub Actions・Kubernetes マニフェスト・CIの設定を、プログラムから扱える形へ' +
+      '読み替えるときや、構文の妥当性を確かめるときに使う。インデント2/4/タブ/1行（indent=0）を選べ、' +
+      'キーの並べ替えと非ASCII文字の \\uXXXX 化もできる。' +
+      '複数ドキュメント（--- 区切り）はJSONの配列1つにまとめ、アンカー &名前 / エイリアス *名前 /' +
+      'マージキー << は展開する（JSONに参照の仕組みが無いため。展開したことは notes で知らせる）。' +
+      'スカラーの解釈は YAML 1.2 core schema に従うので yes / no / on / off / NO は文字列のままだが、' +
+      'YAML 1.1 のパーサでは真偽値になる値、0755（10進の755になる）、12:30（60進数の750になる）、' +
+      '日付に見える値は notes で知らせる。' +
+      '対応: ブロックマップ/シーケンス・フロー表記 [] {}・引用スカラー（複数行・エスケープ）・' +
+      'ブロックスカラー | > と chomping - + と明示インデント・タグ（!!str !!int !!float !!bool !!null !!binary）・コメント。' +
+      '未対応は「? キー」の明示キー記法のみ。' +
+      JSON_YAML_SHARED,
+    inputSchema: {
+      text: z.string().optional().describe('変換するYAML（path と排他）'),
+      path: z.string().optional().describe('変換するYAMLファイルの絶対パス（UTF-8として読む。text と排他）'),
+      outputPath: z.string().optional().describe('JSONを書き出す絶対パス（指定すると text は返さない）'),
+      indent: z
+        .union([z.number().int().min(0).max(8), z.literal('tab')])
+        .optional()
+        .describe('JSONのインデント（既定2 / 0=改行なしの1行 / "tab"=タブ）'),
+      sortKeys: z.boolean().optional().describe('キーを名前順に並べるか（既定 false=入力の順）'),
+      ascii: z.boolean().optional().describe('非ASCII文字を \\uXXXX へエスケープするか（既定 false）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('yaml_to_json');
+    return asText(await yamlToJson(opts));
   },
 );
 

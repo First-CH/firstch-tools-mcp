@@ -12,6 +12,10 @@ import {
   decodeComponent, encodeComponent, setParam, removeParams, getUtm, analyzeUrl, UrlParamsError,
 } from './url.mjs';
 import { htmlEscape, escapeHtml, unescapeHtml, htmlEscapeConvert, HtmlEscapeError } from './html-escape.mjs';
+import {
+  jsonToYaml, yamlToJson, formatJsonFile, formatYamlFile, parseJson, parseYaml,
+  formatJson, formatYaml, jsonYamlConvert, JsonYamlError,
+} from './json-yaml.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -997,5 +1001,224 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => htmlEscape({ text: 'a', mode: 'bogus' }), HtmlEscapeError);
   await assert.rejects(() => htmlEscape({ text: 'a', nonAscii: 'bogus' }), HtmlEscapeError);
 }
+
+// ---- json-yaml.mjs（JSON ⇄ YAML 相互変換＆構文フォーマッター） ----
+{
+  // JSONパーサ: JSON.parse と同じ値になる
+  for (const src of ['{"a":1,"b":[true,false,null]}', '[]', '{}', '"\\u3042\\n"', '-0.5', '1e10', '{"":"empty"}']) {
+    const r = parseJson(src);
+    assert.ok(r.ok, src + ' → ' + JSON.stringify(r.error));
+    assert.deepEqual(JSON.parse(formatJson(r.value, { indent: 0 })), JSON.parse(src), src);
+  }
+  // JSON出力は JSON.stringify と一致する（インデント2 / 1行 / タブ）
+  for (const v of [{ a: 1, b: [1, 2], c: { d: 'e' } }, [], {}, { s: 'q" b\\ t\t n\n' }]) {
+    assert.equal(formatJson(v, { indent: 2 }), JSON.stringify(v, null, 2));
+    assert.equal(formatJson(v, { indent: 0 }), JSON.stringify(v));
+    assert.equal(formatJson(v, { indent: 'tab' }), JSON.stringify(v, null, '\t'));
+  }
+  // エラーは行と桁で返る
+  const badJson = parseJson('{\n  "a": 1,\n  "b" 2\n}');
+  assert.equal(badJson.ok, false);
+  assert.equal(badJson.error.code, 'JSON_COLON_EXPECTED');
+  assert.deepEqual([badJson.error.line, badJson.error.col], [3, 7]);
+  // コメント・末尾カンマ・裸のキーは読んだうえで指摘する（tsconfig.json 等が実在するため）
+  const relaxed = parseJson('{\n // c\n a: 1,\n "b": [1,2,],\n}');
+  assert.ok(relaxed.ok);
+  assert.deepEqual(JSON.parse(formatJson(relaxed.value, { indent: 0 })), { a: 1, b: [1, 2] });
+  assert.deepEqual(relaxed.notes.map((n) => n.code).sort(), ['JSON_COMMENT', 'JSON_TRAILING_COMMA', 'JSON_UNQUOTED_KEY']);
+  assert.equal(parseJson('[1,2,]', { relaxed: false }).error.code, 'JSON_TRAILING_COMMA');
+  // __proto__ でプロトタイプ汚染しない
+  assert.ok(parseJson('{"__proto__":{"x":1}}').ok);
+  assert.equal({}.x, undefined);
+
+  // YAMLパーサ: ブロック・フロー・ブロックスカラー・アンカー・マージキー・複数ドキュメント
+  const y = parseYaml([
+    'version: "3.9"',
+    'services:',
+    '  web:',
+    '    image: nginx:1.25',
+    '    ports:',
+    '      - "80:80"',
+    '    depends_on: [db, cache]',
+    '    command: |',
+    '      echo one',
+    '      echo two',
+    '    note: >',
+    '      folded text',
+    '      continues',
+    'defaults: &d',
+    '  pool: 5',
+    'dev:',
+    '  <<: *d',
+    '  name: dev',
+    '---',
+    '- a',
+    '- b',
+  ].join('\n'));
+  assert.ok(y.ok, JSON.stringify(y.error));
+  assert.equal(y.docs.length, 2);
+  const doc = y.docs[0];
+  assert.equal(doc.version, '3.9');
+  assert.deepEqual(doc.services.web.ports, ['80:80']);
+  assert.deepEqual(doc.services.web.depends_on, ['db', 'cache']);
+  assert.equal(doc.services.web.command, 'echo one\necho two\n');
+  assert.equal(doc.services.web.note, 'folded text continues\n');
+  assert.deepEqual(JSON.parse(formatJson(y.docs[0].dev, { indent: 0 })), { pool: 5, name: 'dev' });
+  assert.deepEqual(y.docs[1], ['a', 'b']);
+
+  // スカラーの解釈は YAML 1.2 core schema
+  const sc = parseYaml('a: 42\nb: -1.5\nc: true\nd: null\ne: ~\nf:\ng: yes\nh: 0755\ni: 0o755\nj: 0x1F\nk: .inf\nl: "42"\n');
+  assert.ok(sc.ok, JSON.stringify(sc.error));
+  assert.equal(sc.value.a, 42);
+  assert.equal(sc.value.b, -1.5);
+  assert.equal(sc.value.c, true);
+  assert.equal(sc.value.d, null);
+  assert.equal(sc.value.e, null);
+  assert.equal(sc.value.f, null);
+  assert.equal(sc.value.g, 'yes');   // 1.2 では文字列（1.1 では真偽値なので notes で知らせる）
+  assert.equal(sc.value.h, 755);     // 先頭の0は8進数ではない
+  assert.equal(sc.value.i, 493);
+  assert.equal(sc.value.j, 31);
+  assert.equal(sc.value.k, Infinity);
+  assert.equal(sc.value.l, '42');
+
+  // 構文エラー（行つき）
+  for (const [text, code, line] of [
+    ['a: 1\n\tb: 2\n', 'TAB_INDENT', 2],
+    ['a: b: c\n', 'YAML_NESTED_COLON', 1],
+    ['a: "x\n', 'YAML_UNTERMINATED_QUOTE', 1],
+    ['a: [1, 2\n', 'YAML_UNTERMINATED_FLOW', 1],
+    ['a: *missing\n', 'YAML_ALIAS_NOT_FOUND', 1],
+    ['items: - a\n', 'YAML_SEQ_INLINE', 1],
+    ['a: 1\nnot a key\n', 'YAML_KEY_EXPECTED', 2],
+    ['? a\n: b\n', 'YAML_EXPLICIT_KEY', 1],
+  ]) {
+    const r = parseYaml(text);
+    assert.equal(r.ok, false, JSON.stringify(text) + ' が通ってしまった');
+    assert.equal(r.error.code, code, JSON.stringify(text) + ' → ' + JSON.stringify(r.error));
+    assert.equal(r.error.line, line, JSON.stringify(text) + ' → ' + JSON.stringify(r.error));
+  }
+  // 壊れた入力でも例外にはしない（必ず ok:false で返す）
+  for (const text of ['"', '|', '[', '{a', '&x', '*', '%YAML', '- - -', '\t']) {
+    assert.equal(parseYaml(text).ok !== undefined, true, JSON.stringify(text));
+  }
+  // 深すぎる入れ子で落ちない
+  let deep = '';
+  for (let k = 0; k < 400; k++) deep += ' '.repeat(k) + 'a:\n';
+  assert.equal(parseYaml(deep).error.code, 'TOO_DEEP');
+
+  // 指摘事項
+  const notes = parseYaml('perm: 0755\nflag: yes\nt: 12:30\ndup: 1\ndup: 2\nid: 123456789012345678901\n').notes.map((n) => n.code);
+  for (const c of ['YAML_LEADING_ZERO', 'YAML11_BOOL', 'YAML_SEXAGESIMAL', 'DUPLICATE_KEY', 'NUMBER_PRECISION']) {
+    assert.ok(notes.includes(c), c + ' の指摘が無い: ' + notes);
+  }
+
+  // YAML出力: 別の型に読まれうる文字列は引用符で守る（往復して値が変わらないこと）
+  const tricky = {
+    yes: 'yes', no: 'no', on: 'on', t: 'true', n: 'null', tilde: '~', num: '42', zero: '0755',
+    time: '12:30', date: '2026-08-12', empty: '', pad: ' x ', hash: 'a # b', colon: 'a: b',
+    dash: '- a', star: '*.js', amp: '&x', pipe: '| x', q: "it's", nl: 'a\nb', nl2: 'a\nb\n',
+    doc: '---', merge: '<<',
+  };
+  const out = formatYaml(tricky);
+  const back = parseYaml(out);
+  assert.ok(back.ok, JSON.stringify(back.error) + '\n' + out);
+  assert.deepEqual(JSON.parse(formatJson(back.value, { indent: 0 })), tricky, out);
+
+  // 出力の見た目（シーケンス内のマップはコンパクト記法・空コレクションはフロー表記）
+  // キー名に y を使わないのは、y が YAML 1.1 の真偽値で引用符が付くため（別のテストで確認している）
+  assert.equal(
+    formatYaml({ a: [{ x: 1, z: 2 }], b: [[1, 2]], c: {}, d: [], e: 'ok' }),
+    'a:\n  - x: 1\n    z: 2\nb:\n  - - 1\n    - 2\nc: {}\nd: []\ne: ok\n',
+  );
+  // キーも別の型に読まれうるなら引用符で守る（y: は YAML 1.1 では true というキーになる）
+  assert.equal(formatYaml({ y: 1, on: 2, '0755': 3 }), "'y': 1\n'on': 2\n'0755': 3\n");
+  assert.equal(formatYaml({ a: { b: [1] } }, { indent: 4 }), 'a:\n    b:\n        - 1\n');
+  assert.equal(formatYaml({ a: 'one\ntwo\n' }), 'a: |\n  one\n  two\n');
+  assert.equal(formatYaml({ a: 'one\ntwo' }), 'a: |-\n  one\n  two\n');
+  assert.equal(formatYaml({ a: null }, { nullStyle: 'tilde', docStart: true }), '---\na: ~\n');
+  assert.equal(formatYaml({ b: 1, a: 2 }, { sortKeys: true }), 'a: 2\nb: 1\n');
+
+  // jsonYamlConvert: 4方向と統計
+  const j2y = jsonYamlConvert({ direction: 'json2yaml', text: '{"a":[1,{"b":"x"}]}' });
+  assert.ok(j2y.ok);
+  assert.equal(j2y.output, 'a:\n  - 1\n  - b: x\n');
+  assert.equal(j2y.stats.max_depth, 4);
+  const y2j = jsonYamlConvert({ direction: 'yaml2json', text: 'a: 1\n---\nb: 2\n', indent: 0 });
+  assert.equal(y2j.output.trim(), '[{"a":1},{"b":2}]');
+  assert.equal(y2j.documents, 2);
+  assert.ok(y2j.notes.some((n) => n.code === 'MULTI_DOC'));
+  assert.equal(jsonYamlConvert({ direction: 'json2json', text: '{"b":1}' }).output, '{\n  "b": 1\n}\n');
+  assert.equal(jsonYamlConvert({ direction: 'yaml2yaml', text: 'b:   1\na: [1]\n' }).output, 'b: 1\na:\n  - 1\n');
+  assert.equal(jsonYamlConvert({ direction: 'json2yaml', text: '  \n' }).empty, true);
+  // .inf / .nan は JSON に無いので null になり、そのことを知らせる
+  const nf = jsonYamlConvert({ direction: 'yaml2json', text: 'a: .nan\n', indent: 0 });
+  assert.equal(nf.output.trim(), '{"a":null}');
+  assert.ok(nf.notes.some((n) => n.code === 'NONFINITE_OUTPUT'));
+  // エラー時は抜き出しがエラー行を指す
+  const ex = jsonYamlConvert({ direction: 'yaml2json', text: 'a: 1\nb: 2\n\tc: 3\nd: 4\n' });
+  assert.equal(ex.ok, false);
+  assert.equal(ex.error.line, 3);
+  assert.deepEqual(ex.excerpt.rows.map((r) => r.line), [1, 2, 3, 4]);
+}
+
+// json_to_yaml / yaml_to_json（MCPの入口・ファイル入出力を含む）
+{
+  const r = await jsonToYaml({ text: '{"name":"web","ports":["80:80"],"mode":"0755","env":{"TZ":"Asia/Tokyo"}}' });
+  assert.equal(r.text, "name: web\nports:\n  - 80:80\nmode: '0755'\nenv:\n  TZ: Asia/Tokyo\n");
+  assert.equal(r.direction, 'json2yaml');
+  assert.deepEqual(r.source, { type: 'text' });
+  assert.equal(r.options.indent, 2);
+  assert.equal(r.stats.keys, 5);   // 入れ子の中まで数える（env.TZ を含む）
+
+  const back = await yamlToJson({ text: r.text, indent: 0 });
+  assert.equal(back.text.trim(), '{"name":"web","ports":["80:80"],"mode":"0755","env":{"TZ":"Asia/Tokyo"}}');
+  assert.equal(back.documents, 1);
+
+  // 指摘には必ず日本語の説明が付く
+  const noted = await yamlToJson({ text: 'a: 0755\nb: yes\n' });
+  assert.ok(noted.notes.length >= 2);
+  assert.ok(noted.notes.every((n) => typeof n.message === 'string' && n.message.length > 0), JSON.stringify(noted.notes));
+  assert.ok(noted.notes.every((n) => n.level === 'warn' || n.level === 'info'));
+
+  // 整形（同じ形式のまま）
+  assert.equal((await formatJsonFile({ text: '{"b":1,"a":2}', sortKeys: true })).text, '{\n  "a": 2,\n  "b": 1\n}\n');
+  assert.equal((await formatYamlFile({ text: 'a:  [1,2]\n' })).text, 'a:\n  - 1\n  - 2\n');
+
+  // ファイル入出力
+  const { mkdtemp, writeFile: wf, readFile: rf } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const dir = await mkdtemp(join(tmpdir(), 'firstch-json-yaml-'));
+  const src = join(dir, 'in.json');
+  const dst = join(dir, 'out.yaml');
+  await wf(src, '{"a": 1, "b": ["x"]}', 'utf8');
+  const fileRes = await jsonToYaml({ path: src, outputPath: dst, indent: 4 });
+  assert.equal(fileRes.text, undefined);
+  assert.equal(fileRes.output, dst);
+  assert.equal(fileRes.source.name, 'in.json');
+  assert.equal(await rf(dst, 'utf8'), 'a: 1\nb:\n    - x\n');
+
+  // 構文エラーは JsonYamlError（メッセージに行・桁・原因・抜き出しを含む）
+  await assert.rejects(
+    () => yamlToJson({ text: 'a: 1\n\tb: 2\n' }),
+    (e) => {
+      assert.ok(e instanceof JsonYamlError, String(e));
+      assert.match(e.message, /TAB_INDENT/);
+      assert.match(e.message, /2行 1桁/);
+      assert.match(e.message, /\^/);
+      return true;
+    },
+  );
+  await assert.rejects(() => jsonToYaml({ text: '{"a" 1}' }), JsonYamlError);
+
+  // 入力・オプションの取り違えは JsonYamlError で弾く
+  await assert.rejects(() => jsonToYaml({}), JsonYamlError);
+  await assert.rejects(() => jsonToYaml({ text: 'a', path: '/tmp/x' }), JsonYamlError);
+  await assert.rejects(() => jsonToYaml({ text: '{}', indent: 99 }), JsonYamlError);
+  await assert.rejects(() => jsonToYaml({ text: '{}', quote: 'bogus' }), JsonYamlError);
+  await assert.rejects(() => jsonToYaml({ text: '{}', nullStyle: 'bogus' }), JsonYamlError);
+}
+
 
 console.log('all tests passed');
