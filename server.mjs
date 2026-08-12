@@ -16,6 +16,7 @@ import { base64Convert } from './base64.mjs';
 import { urlParams } from './url.mjs';
 import { htmlEscape } from './html-escape.mjs';
 import { jsonToYaml, yamlToJson } from './json-yaml.mjs';
+import { pxRemConvert } from './px-rem.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -576,6 +577,69 @@ server.registerTool(
   async (opts) => {
     await logUsage('yaml_to_json');
     return asText(await yamlToJson(opts));
+  },
+);
+
+server.registerTool(
+  'px_rem_convert',
+  {
+    title: 'px ⇄ rem / em 単位換算・CSSの一括変換',
+    description:
+      'CSSの長さの単位を px ⇄ rem / em / pt で換算する（tools.first-ch.com/px-rem/ と同一ロジック）。' +
+      'value を渡すと1つの値の換算になり、px・rem・em・pt の値と、そのまま貼れる font-size の1行、' +
+      'よく使うフォントサイズ（12〜64px）のスケール表を返す。' +
+      'css か path を渡すとCSS全体の一括変換になり、px→rem（px2rem）のほか px2em / rem2px / em2px を選べる。' +
+      'デザインカンプのpx指定をremへ直す、既存のスタイルシートをアクセシビリティのためにrem化する、' +
+      'rem表記のCSSを実寸で確かめる、といった用途に使う。' +
+      '一括変換ではコメント・文字列（content: "10px"）・url() の中身と、--size-16px のように' +
+      '識別子の一部になっている数字は書き換えない。既定では minPx=2 で1pxの罫線を残し（remにすると' +
+      '環境によって太さがばらつくため）、@media などアットルールの条件（ブレークポイント）も変換しない。' +
+      'ルートは 62.5% のようなパーセントでも指定でき、その場合はブラウザ既定16pxに対する割合として読む。' +
+      '割り切れない値は丸めたことを notes で知らせる。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      value: z
+        .union([z.number(), z.string()])
+        .optional()
+        .describe('換算する1つの値（24 / "24px" / "1.5rem" のように単位を含めてもよい。css / path と排他）'),
+      unit: z
+        .enum(['px', 'rem', 'em', 'pt', '%'])
+        .optional()
+        .describe('value の単位（既定 px。value に単位を書いた場合はそちらが優先）'),
+      css: z.string().optional().describe('一括変換するCSS（value / path と排他）'),
+      path: z.string().optional().describe('一括変換するCSSファイルの絶対パス（UTF-8として読む。value / css と排他）'),
+      outputPath: z.string().optional().describe('変換後のCSSを書き出す絶対パス（指定すると本文は返さない）'),
+      direction: z
+        .enum(['px2rem', 'px2em', 'rem2px', 'em2px'])
+        .optional()
+        .describe('一括変換の向き（既定 px2rem）'),
+      root: z
+        .union([z.number(), z.string()])
+        .optional()
+        .describe('ルート（html要素）のフォントサイズ px（既定16。"62.5%" のような指定も可）'),
+      parent: z
+        .union([z.number(), z.string()])
+        .optional()
+        .describe('親要素のフォントサイズ px（em の基準。既定は root と同じ）'),
+      precision: z
+        .union([z.number().int().min(0).max(6), z.literal('auto')])
+        .optional()
+        .describe('小数の桁（既定 auto=6桁まで見て末尾の0を落とす。数値を渡すとその桁で固定）'),
+      minPx: z
+        .number()
+        .optional()
+        .describe('一括変換で、換算後の絶対値がこの px 未満の値は変換しない（既定2＝1pxの罫線を残す。0で全部変換）'),
+      zeroUnitless: z.boolean().optional().describe('0 を単位なしの 0 にするか（既定 true）'),
+      skipMedia: z.boolean().optional().describe('@media などアットルールの条件を変換対象から外すか（既定 true）'),
+      ignoreProps: z
+        .array(z.string())
+        .optional()
+        .describe('変換しないプロパティ（前方一致。例 ["border","outline","box-shadow"]）'),
+      scale: z.boolean().optional().describe('値の換算のときに12〜64pxのスケール表を返すか（既定 true）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('px_rem_convert');
+    return asText(await pxRemConvert(opts));
   },
 );
 

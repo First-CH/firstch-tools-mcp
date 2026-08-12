@@ -16,6 +16,9 @@ import {
   jsonToYaml, yamlToJson, formatJsonFile, formatYamlFile, parseJson, parseYaml,
   formatJson, formatYaml, jsonYamlConvert, JsonYamlError,
 } from './json-yaml.mjs';
+import {
+  pxRemConvert, prConvert, prConvertCss, prFormat, prParseLength, prResolveBase, prScale, PxRemError,
+} from './px-rem.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -1218,6 +1221,144 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => jsonToYaml({ text: '{}', indent: 99 }), JsonYamlError);
   await assert.rejects(() => jsonToYaml({ text: '{}', quote: 'bogus' }), JsonYamlError);
   await assert.rejects(() => jsonToYaml({ text: '{}', nullStyle: 'bogus' }), JsonYamlError);
+}
+
+
+// ---- px-rem.mjs（px ⇄ rem / em の換算・CSSの一括変換） ----
+{
+  // 基本の換算（ルート16px）
+  const r = prConvert({ value: 24 });
+  assert.equal(r.px, 24);
+  assert.equal(r.rem, 1.5);
+  assert.equal(r.em, 1.5);
+  assert.equal(r.pt, 18);          // 1px = 0.75pt
+
+  // rem / em / pt / % からも戻せる
+  assert.equal(prConvert({ value: 1.5, unit: 'rem' }).px, 24);
+  assert.equal(prConvert({ value: 2, unit: 'em', parent: 10 }).px, 20);
+  assert.equal(prConvert({ value: 18, unit: 'pt' }).px, 24);
+  assert.equal(prConvert({ value: 150, unit: '%', parent: 16 }).px, 24);
+  assert.equal(prConvert({ value: 'zzz' }), null);
+
+  // ルートが変われば rem も変わる（em は親要素基準で別に動く）
+  const r10 = prConvert({ value: 24, root: 10 });
+  assert.equal(r10.rem, 2.4);
+  assert.equal(r10.em, 2.4);
+  const nested = prConvert({ value: 24, root: 16, parent: 20 });
+  assert.equal(nested.rem, 1.5);
+  assert.equal(nested.em, 1.2);
+
+  // 基準サイズの指定は 62.5% のようなパーセントでも読む（ブラウザ既定16pxに対する割合）
+  assert.equal(prResolveBase('62.5%', 16), 10);
+  assert.equal(prResolveBase('12pt', 16), 16);
+  assert.equal(prResolveBase('', 16), 16);
+  assert.equal(prResolveBase('0', 16), 16);      // 0 や負値は基準にできないので fallback
+  assert.equal(prResolveBase(20, 16), 20);
+
+  // 数の書き出し: auto は末尾の0を落とし、桁を渡すと固定する
+  assert.equal(prFormat(1.5, 'auto'), '1.5');
+  assert.equal(prFormat(1.5, 3), '1.500');
+  assert.equal(prFormat(16 / 14, 'auto'), '1.142857');
+  assert.equal(prFormat(0, 'auto'), '0');
+  assert.equal(prFormat(-0.0001, 2), '0.00');    // 桁固定でも -0 にはしない
+  assert.equal(prFormat(8.325, 2), '8.33');      // 8.325*100 が 832.4999… になる誤差を吸収する
+
+  // 長さの読み取り
+  assert.deepEqual(prParseLength('24px'), { value: 24, unit: 'px' });
+  assert.deepEqual(prParseLength('1.5 rem'), { value: 1.5, unit: 'rem' });
+  assert.deepEqual(prParseLength('24', 'em'), { value: 24, unit: 'em' });
+  assert.equal(prParseLength('24 px 3'), null);
+  assert.equal(prParseLength(''), null);
+
+  // スケール表は 12〜64px の15段
+  const scale = prScale({ root: 16 });
+  assert.equal(scale.length, 15);
+  assert.equal(scale[0].px, 12);
+  assert.equal(scale[0].rem, 0.75);
+  assert.equal(scale[scale.length - 1].px, 64);
+  assert.equal(scale[scale.length - 1].rem, 4);
+
+  // CSSの一括変換: 既定は px→rem・1px の罫線と @media の条件は残す
+  const css = prConvertCss(
+    'a{padding:24px;border:1px solid red;font-size:16px}\n@media (min-width:768px){a{font-size:18px}}',
+    { minPx: 2 },
+  );
+  assert.equal(
+    css.text,
+    'a{padding:1.5rem;border:1px solid red;font-size:1rem}\n@media (min-width:768px){a{font-size:1.125rem}}',
+  );
+  assert.equal(css.stats.found, 5);
+  assert.equal(css.stats.converted, 3);
+  assert.equal(css.stats.skipped_small, 1);
+  assert.equal(css.stats.skipped_media, 1);
+
+  // コメント・文字列・url() の中身と、識別子の一部の数字は書き換えない
+  const safe = prConvertCss('/* 24px */ .a{margin:0px;width:calc(100% - 10px);content:"10px";background:url(a10px.png)}');
+  assert.equal(safe.text, '/* 24px */ .a{margin:0;width:calc(100% - 0.625rem);content:"10px";background:url(a10px.png)}');
+  assert.equal(safe.stats.zeroed, 1);
+  assert.equal(prConvertCss('--size-16px: 3px;').text, '--size-16px: 0.1875rem;');
+
+  // 逆向き・em 向き・除外プロパティ
+  assert.equal(prConvertCss('a{font-size:1.5rem}', { direction: 'rem2px' }).text, 'a{font-size:24px}');
+  assert.equal(prConvertCss('a{padding:24px}', { direction: 'px2em', parent: 20 }).text, 'a{padding:1.2em}');
+  assert.equal(
+    prConvertCss('.b{border:4px solid;padding:4px}', { ignoreProps: ['border'] }).text,
+    '.b{border:4px solid;padding:0.25rem}',
+  );
+  // 負の値・小数・ショートハンドも通る
+  assert.equal(prConvertCss('p{margin:-10px 0 12px;font:14px/20px sans-serif}').text,
+    'p{margin:-0.625rem 0 0.75rem;font:0.875rem/1.25rem sans-serif}');
+
+  // MCPツール本体: 値の換算はスケール表と指摘つきで返る
+  const v = await pxRemConvert({ value: 24 });
+  assert.equal(v.mode, 'value');
+  assert.equal(v.formatted.rem, '1.5rem');
+  assert.equal(v.css, 'font-size: 1.5rem; /* 24px */');
+  assert.equal(v.exact, true);
+  assert.equal(v.scale.length, 15);
+  assert.equal(v.notes.length, 0);
+
+  // ルート10px は 62.5%テクニックとして警告する
+  const v10 = await pxRemConvert({ value: 1.4, unit: 'rem', root: '62.5%' });
+  assert.equal(v10.formatted.px, '14px');
+  const codes10 = v10.notes.map((n) => n.code);
+  assert.ok(codes10.includes('ROOT_NOT_16'));
+  assert.ok(codes10.includes('ROOT_625'));
+
+  // 割り切れない値は丸めたことを知らせる
+  const v14 = await pxRemConvert({ value: 16, root: 14, scale: false });
+  assert.equal(v14.exact, false);
+  assert.equal(v14.scale, undefined);
+  assert.ok(v14.notes.some((n) => n.code === 'NOT_EXACT'));
+
+  // CSSモード（既定 minPx=2 で 1px を残す）
+  const c = await pxRemConvert({ css: 'a{border:1px solid;padding:24px}' });
+  assert.equal(c.mode, 'css');
+  assert.equal(c.text, 'a{border:1px solid;padding:1.5rem}');
+  assert.ok(c.notes.some((n) => n.code === 'SKIPPED_SMALL'));
+
+  // ファイル入出力
+  {
+    const { mkdtemp, writeFile: wf, readFile: rf } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'firstch-px-rem-'));
+    const src = join(dir, 'in.css');
+    const dst = join(dir, 'out.css');
+    await wf(src, '.a{font-size:24px}\n', 'utf8');
+    const fileRes = await pxRemConvert({ path: src, outputPath: dst });
+    assert.equal(fileRes.text, undefined);
+    assert.equal(fileRes.output, dst);
+    assert.equal(fileRes.source.name, 'in.css');
+    assert.equal(await rf(dst, 'utf8'), '.a{font-size:1.5rem}\n');
+  }
+
+  // 入力の取り違えは PxRemError で弾く
+  await assert.rejects(() => pxRemConvert({}), PxRemError);
+  await assert.rejects(() => pxRemConvert({ value: 24, css: 'a{}' }), PxRemError);
+  await assert.rejects(() => pxRemConvert({ css: 'a{}', path: '/tmp/x.css' }), PxRemError);
+  await assert.rejects(() => pxRemConvert({ value: 'zzz' }), PxRemError);
+  await assert.rejects(() => pxRemConvert({ css: 'a{}', direction: 'bogus' }), PxRemError);
 }
 
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 15 registered tools, and `tools/call` actually executes handlers
+// returns all 16 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
-// base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json) and returns the expected values — this catches
+// base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -68,6 +68,7 @@ try {
     'jsonld_generate',
     'llmstxt_generate',
     'marp_render',
+    'px_rem_convert',
     'testdata_generate',
     'url_params',
     'webp_convert',
@@ -262,6 +263,25 @@ try {
 
   const jyErr = await request('tools/call', { name: 'json_to_yaml', arguments: {} }, 28);
   assert.ok(jyErr.result?.isError, `json_to_yaml should reject a missing text/path: ${JSON.stringify(jyErr)}`);
+
+  // px_rem_convert: 値の換算とCSSの一括変換（1pxの罫線と @media の条件は既定で残す）
+  const pxv = await callTool('px_rem_convert', { value: 24 }, 29);
+  assert.equal(pxv.formatted?.rem, '1.5rem', `px_rem_convert rem mismatch: ${JSON.stringify(pxv)}`);
+  assert.equal(pxv.scale?.length, 15, `px_rem_convert scale mismatch: ${JSON.stringify(pxv.scale)}`);
+
+  const pxc = await callTool(
+    'px_rem_convert',
+    { css: 'a{border:1px solid;padding:24px}\n@media (min-width:768px){a{font-size:18px}}' },
+    30,
+  );
+  assert.equal(
+    pxc.text,
+    'a{border:1px solid;padding:1.5rem}\n@media (min-width:768px){a{font-size:1.125rem}}',
+    `px_rem_convert css mismatch: ${JSON.stringify(pxc.text)}`,
+  );
+
+  const pxErr = await request('tools/call', { name: 'px_rem_convert', arguments: {} }, 31);
+  assert.ok(pxErr.result?.isError, `px_rem_convert should reject an empty call: ${JSON.stringify(pxErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();
