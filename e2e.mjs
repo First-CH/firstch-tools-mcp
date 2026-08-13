@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 16 registered tools, and `tools/call` actually executes handlers
+// returns all 17 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
-// base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert) and returns the expected values — this catches
+// base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
+// color_convert) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -58,6 +59,7 @@ try {
   const names = (listRes.result?.tools || []).map((t) => t.name).sort();
   const expected = [
     'base64_encode',
+    'color_convert',
     'contrast_check',
     'count_chars',
     'cron_explain',
@@ -282,6 +284,20 @@ try {
 
   const pxErr = await request('tools/call', { name: 'px_rem_convert', arguments: {} }, 31);
   assert.ok(pxErr.result?.isError, `px_rem_convert should reject an empty call: ${JSON.stringify(pxErr)}`);
+
+  // color_convert: 形式変換とアルファ合成（黒50%を白に重ねると #808080）
+  const col = await callTool('color_convert', { color: 'rgb(200 80 31)', alpha: 0.4, background: '#ffffff' }, 32);
+  assert.equal(col.formats?.hex, '#c8501f', `color_convert hex mismatch: ${JSON.stringify(col.formats)}`);
+  assert.equal(col.formats?.rgba, 'rgb(200 80 31 / 0.4)', `color_convert rgba mismatch: ${JSON.stringify(col.formats)}`);
+  assert.equal(col.formats?.hex8, '#c8501f66', `color_convert hex8 mismatch: ${JSON.stringify(col.formats)}`);
+  assert.equal(col.flattened?.hex, '#e9b9a5', `color_convert flattened mismatch: ${JSON.stringify(col.flattened)}`);
+  assert.equal(col.palette?.length, 11, `color_convert palette mismatch: ${JSON.stringify(col.palette)}`);
+
+  const colBlack = await callTool('color_convert', { color: 'black', alpha: '50%', alphaTable: false, palette: false }, 33);
+  assert.equal(colBlack.flattened?.hex, '#808080', `color_convert composite mismatch: ${JSON.stringify(colBlack.flattened)}`);
+
+  const colErr = await request('tools/call', { name: 'color_convert', arguments: { color: 'zzz' } }, 34);
+  assert.ok(colErr.result?.isError, `color_convert should reject an unreadable colour: ${JSON.stringify(colErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

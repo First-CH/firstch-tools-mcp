@@ -19,6 +19,10 @@ import {
 import {
   pxRemConvert, prConvert, prConvertCss, prFormat, prParseLength, prResolveBase, prScale, PxRemError,
 } from './px-rem.mjs';
+import {
+  colorConvert, clParseColor, clHex, clRgbStr, clHslStr, clOklchStr, clFlatten,
+  clContrast, clPalette, clRgbToOklch, clOklchToRgb, ColorError,
+} from './color.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -1359,6 +1363,126 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => pxRemConvert({ css: 'a{}', path: '/tmp/x.css' }), PxRemError);
   await assert.rejects(() => pxRemConvert({ value: 'zzz' }), PxRemError);
   await assert.rejects(() => pxRemConvert({ css: 'a{}', direction: 'bogus' }), PxRemError);
+}
+
+
+/* ==================== color_convert ==================== */
+{
+  // 入力形式ごとに同じ色へ落ちる（HEX / rgb / hsl / 色名 / 大文字 / 3桁）
+  const same = ['#c8501f', '#C8501F', 'rgb(200 80 31)', 'rgb(200, 80, 31)', 'rgb(78.43% 31.37% 12.16%)'];
+  for (const v of same) {
+    const c = clParseColor(v);
+    assert.ok(c, v);
+    assert.equal(clHex(c, { alpha: 'never' }), '#c8501f', v);
+  }
+  assert.equal(clHex(clParseColor('#0f0'), { alpha: 'never' }), '#00ff00');
+  assert.equal(clHex(clParseColor('tomato'), { alpha: 'never' }), '#ff6347');
+  assert.equal(clParseColor('rebeccapurple').name, 'rebeccapurple');
+  assert.equal(clParseColor('transparent').a, 0);
+  // hsl / hwb / oklab の既知値
+  assert.equal(clHex(clParseColor('hsl(0 100% 50%)'), { alpha: 'never' }), '#ff0000');
+  assert.equal(clHex(clParseColor('hsl(120deg 100% 50%)'), { alpha: 'never' }), '#00ff00');
+  assert.equal(clHex(clParseColor('hsl(0.5turn 100% 50%)'), { alpha: 'never' }), '#00ffff');
+  assert.equal(clHex(clParseColor('hwb(0 0% 0%)'), { alpha: 'never' }), '#ff0000');
+  assert.equal(clHex(clParseColor('hwb(0 50% 50%)'), { alpha: 'never' }), '#808080');
+  // アルファの読み取り（4桁/8桁HEX・カンマ・スラッシュ・パーセント）
+  assert.equal(clParseColor('#00000080').a, 128 / 255);
+  assert.equal(clParseColor('rgba(0, 0, 0, 0.5)').a, 0.5);
+  assert.equal(clParseColor('rgb(0 0 0 / 50%)').a, 0.5);
+  assert.equal(clParseColor('#f00f').a, 1);
+  // 読めない入力は null（5桁・7桁のHEXは不正）
+  for (const v of ['zzz', '#12345', '#1234567', 'rgb(1 2)', 'oklch(50%)', '']) {
+    assert.equal(clParseColor(v), null, v);
+  }
+
+  // 往復（HEX → OKLCH → HEX）が全ての名前付き色で1/255以内に戻る
+  let worst = 0;
+  for (const name of ['tomato', 'dodgerblue', 'rebeccapurple', 'gold', 'darkslategray', 'white', 'black', 'lime']) {
+    const c = clParseColor(name);
+    const lch = clRgbToOklch(c.r, c.g, c.b);
+    const back = clOklchToRgb(lch.l, lch.c, lch.h);
+    worst = Math.max(worst, Math.abs(back.r - c.r), Math.abs(back.g - c.g), Math.abs(back.b - c.b));
+  }
+  assert.ok(worst < 0.5, `oklch round-trip drift ${worst}`);
+
+  // sRGB外のOKLCHは彩度だけを下げて収める（明度と色相は保つ）
+  const wide = clParseColor('oklch(70% 0.35 140)');
+  assert.equal(wide.clipped, true);
+  const fitted = clRgbToOklch(wide.r, wide.g, wide.b);
+  assert.ok(Math.abs(fitted.l - 0.7) < 0.005, `L drift ${fitted.l}`);
+  assert.ok(Math.abs(fitted.h - 140) < 0.5, `H drift ${fitted.h}`);
+  assert.ok(fitted.c < 0.35);
+
+  // アルファ合成: 黒50%を白に重ねると #808080（127.5 の四捨五入で128）
+  const flat = clFlatten({ r: 0, g: 0, b: 0, a: 0.5 }, { r: 255, g: 255, b: 255, a: 1 });
+  assert.equal(clHex(flat, { alpha: 'never' }), '#808080');
+  // 背景も透過している場合はアルファも合成する
+  const both = clFlatten({ r: 0, g: 0, b: 0, a: 0.5 }, { r: 255, g: 255, b: 255, a: 0.5 });
+  assert.equal(Math.round(both.a * 100) / 100, 0.75);
+
+  // コントラスト比（既知値: 黒×白 = 21）
+  assert.equal(clContrast({ r: 0, g: 0, b: 0 }, { r: 255, g: 255, b: 255 }), 21);
+
+  // 書き出しの記法
+  const c8 = clParseColor('#c8501f');
+  c8.a = 0.5;
+  assert.equal(clRgbStr(c8, { alpha: 'always' }), 'rgb(200 80 31 / 0.5)');
+  assert.equal(clRgbStr(c8, { alpha: 'always', legacy: true }), 'rgba(200, 80, 31, 0.5)');
+  assert.equal(clRgbStr(c8, { alpha: 'always', alphaPercent: true }), 'rgb(200 80 31 / 50%)');
+  assert.equal(clHslStr(c8, { alpha: 'always', legacy: true }), 'hsla(17.4, 73.16%, 45.29%, 0.5)');
+  assert.equal(clHex(c8, { alpha: 'always', upper: true }), '#C8501F80');
+  assert.match(clOklchStr(c8, { alpha: 'never' }), /^oklch\(58\.3% 0\.164\d 40\.2\d?\)$/);
+
+  // パレット: 11段・明度が単調に下がる・入力に最も近い段が1つだけ base
+  const pal = clPalette(clParseColor('#c8501f'));
+  assert.equal(pal.length, 11);
+  assert.equal(pal.filter((p) => p.base).length, 1);
+  for (let i = 1; i < pal.length; i++) {
+    assert.ok(clRgbToOklch(pal[i].color.r, pal[i].color.g, pal[i].color.b).l
+      < clRgbToOklch(pal[i - 1].color.r, pal[i - 1].color.g, pal[i - 1].color.b).l, `tone ${pal[i].key}`);
+  }
+
+  // colorConvert 本体
+  const r = colorConvert({ color: '#c8501f', alpha: 0.4, background: '#ffffff' });
+  assert.equal(r.formats.hex, '#c8501f');
+  assert.equal(r.formats.hex8, '#c8501f66');
+  assert.equal(r.formats.rgba, 'rgb(200 80 31 / 0.4)');
+  assert.equal(r.rgb.r, 200);
+  assert.equal(r.alpha, 0.4);
+  assert.equal(r.flattened.hex, '#e9b9a5');
+  assert.equal(r.contrast.on_white, 4.54);
+  assert.equal(r.alpha_table.length, 11);
+  assert.equal(r.alpha_table[5].percent, 50);
+  assert.equal(r.alpha_table[5].flattened, '#e4a88f');
+  assert.equal(r.alpha_table[10].flattened, '#ffffff');
+  assert.equal(r.palette.length, 11);
+  assert.ok(r.notes.some((n) => n.code === 'ALPHA'));
+
+  // alpha は 0〜1 でも 0〜100 でも '50%' でも同じ意味に読む
+  assert.equal(colorConvert({ color: '#000', alpha: 40 }).alpha, 0.4);
+  assert.equal(colorConvert({ color: '#000', alpha: '40%' }).alpha, 0.4);
+  assert.equal(colorConvert({ color: '#000', alpha: 0.4 }).alpha, 0.4);
+
+  // 名前付き色に一致したら指摘する / 無彩色は色相に意味がないと指摘する
+  assert.ok(colorConvert({ color: 'rgb(255 99 71)' }).notes.some((n) => n.code === 'NAMED'));
+  assert.ok(colorConvert({ color: '#808080' }).notes.some((n) => n.code === 'GRAY'));
+  assert.ok(colorConvert({ color: 'oklch(70% 0.35 140)' }).notes.some((n) => n.code === 'CLIPPED'));
+
+  // 背景を変えると合成結果も変わる
+  assert.equal(colorConvert({ color: '#000', alpha: 0.5, background: '#23282e' }).flattened.hex, '#121417');
+
+  // 表・パレットは切れる
+  const slim = colorConvert({ color: '#c8501f', alphaTable: false, palette: false });
+  assert.equal(slim.alpha_table, undefined);
+  assert.equal(slim.palette, undefined);
+  assert.equal(colorConvert({ color: '#c8501f', step: 25 }).alpha_table.length, 5);
+
+  // 不正な入力は ColorError
+  assert.throws(() => colorConvert({}), ColorError);
+  assert.throws(() => colorConvert({ color: 'zzz' }), ColorError);
+  assert.throws(() => colorConvert({ color: '#fff', background: 'nope' }), ColorError);
+  assert.throws(() => colorConvert({ color: '#fff', step: 0 }), ColorError);
+  assert.throws(() => colorConvert({ color: '#fff', syntax: 'bogus' }), ColorError);
 }
 
 

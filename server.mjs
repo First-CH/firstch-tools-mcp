@@ -17,6 +17,7 @@ import { urlParams } from './url.mjs';
 import { htmlEscape } from './html-escape.mjs';
 import { jsonToYaml, yamlToJson } from './json-yaml.mjs';
 import { pxRemConvert } from './px-rem.mjs';
+import { colorConvert } from './color.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -640,6 +641,50 @@ server.registerTool(
   async (opts) => {
     await logUsage('px_rem_convert');
     return asText(await pxRemConvert(opts));
+  },
+);
+
+server.registerTool(
+  'color_convert',
+  {
+    title: 'カラーコード変換・アルファ透過計算',
+    description:
+      '色のコードを HEX / RGB / HSL / OKLCH で相互変換し、アルファ（透過度）付きの rgba() / hsla() / 8桁HEX を返す' +
+      '（tools.first-ch.com/color/ と同一ロジック）。' +
+      '入力は HEX（3/4/6/8桁）・rgb()・hsl()・hwb()・oklch()・oklab()・CSSの名前付き色（148色）・transparent を受け付け、' +
+      '旧記法のカンマ区切りと新記法のスラッシュ区切り、角度の単位（deg / grad / rad / turn）も読む。' +
+      'background を渡すと、透過色をその背景の上に重ねたときに実際に見える色（アルファ合成の結果）を flattened で返すので、' +
+      'デザインカンプの半透明レイヤーを不透明なHEXへ置き換える用途に使える。' +
+      'あわせて白文字・黒文字とのWCAG 2.1コントラスト比、アルファを刻んだ表（alpha_table）、' +
+      '色相と彩度を保ったまま明度だけを50〜950の11段に振った明度パレット（palette）を返す。' +
+      'sRGBで表現できないOKLCHは、RGBを切り詰めると色相がずれるため、明度と色相を保ったまま彩度だけを下げて収める。' +
+      '完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      color: z
+        .string()
+        .describe('変換する色（"#c8501f" / "rgb(200 80 31)" / "hsl(17 73% 45%)" / "oklch(56% 0.16 41)" / "tomato" など）'),
+      alpha: z
+        .union([z.number(), z.string()])
+        .optional()
+        .describe('アルファ（0〜1・0〜100・"50%" のいずれか。指定すると color 側のアルファを上書きする）'),
+      background: z
+        .string()
+        .optional()
+        .describe('重ねる背景色（既定 #ffffff）。flattened と alpha_table の合成結果に使う'),
+      syntax: z
+        .enum(['modern', 'legacy'])
+        .optional()
+        .describe('rgb(200 80 31 / 50%) のモダン記法（既定）か、rgba(200, 80, 31, 0.5) の従来記法か'),
+      uppercase: z.boolean().optional().describe('HEXを大文字で書き出すか（既定 false）'),
+      alphaPercent: z.boolean().optional().describe('アルファをパーセントで書くか（既定 false＝0〜1）'),
+      step: z.number().optional().describe('alpha_table の刻み（%・1〜50。既定10）'),
+      alphaTable: z.boolean().optional().describe('アルファを刻んだ表を返すか（既定 true）'),
+      palette: z.boolean().optional().describe('明度パレット（50〜950の11段）を返すか（既定 true）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('color_convert');
+    return asText(colorConvert(opts));
   },
 );
 
