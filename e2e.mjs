@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 17 registered tools, and `tools/call` actually executes handlers
+// returns all 18 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert) and returns the expected values — this catches
+// color_convert / hash_generate) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -65,6 +65,7 @@ try {
     'cron_explain',
     'diff_check',
     'encoding_convert',
+    'hash_generate',
     'html_escape',
     'json_to_yaml',
     'jsonld_generate',
@@ -298,6 +299,26 @@ try {
 
   const colErr = await request('tools/call', { name: 'color_convert', arguments: { color: 'zzz' } }, 34);
   assert.ok(colErr.result?.isError, `color_convert should reject an unreadable colour: ${JSON.stringify(colErr)}`);
+
+  // hash_generate: 既知のテストベクタと、期待値との照合
+  const hash = await callTool('hash_generate', { text: 'hello', expected: '5d41402abc4b2a76b9719d911017c592  hello.txt' }, 35);
+  assert.equal(hash.hashes?.md5, '5d41402abc4b2a76b9719d911017c592', `hash_generate md5 mismatch: ${JSON.stringify(hash.hashes)}`);
+  assert.equal(
+    hash.hashes?.sha256,
+    '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824',
+    `hash_generate sha256 mismatch: ${JSON.stringify(hash.hashes)}`,
+  );
+  assert.equal(hash.verification?.matched, true, `hash_generate verification mismatch: ${JSON.stringify(hash.verification)}`);
+
+  const hashB64 = await callTool('hash_generate', { text: 'hello', algorithms: ['sha256'], format: 'base64' }, 36);
+  assert.equal(
+    hashB64.hashes?.sha256,
+    'LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=',
+    `hash_generate base64 mismatch: ${JSON.stringify(hashB64.hashes)}`,
+  );
+
+  const hashErr = await request('tools/call', { name: 'hash_generate', arguments: {} }, 37);
+  assert.ok(hashErr.result?.isError, `hash_generate should require text or path: ${JSON.stringify(hashErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

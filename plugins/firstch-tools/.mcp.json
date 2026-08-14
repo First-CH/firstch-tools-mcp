@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@first-ch/tools-mcp@0.15.0"
+        "@first-ch/tools-mcp@0.16.0"
       ]
     }
   }

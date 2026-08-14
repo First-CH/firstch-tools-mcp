@@ -1,8 +1,8 @@
 {
   "name": "firstch-tools",
   "displayName": "First CH Tools",
-  "version": "0.15.0",
-  "description": "MCP tools for WCAG contrast check, JP character/X-weight count, WebP conversion, JSON-LD generation, llms.txt generation, encoding/line-ending conversion, Marp Markdown→slide rendering, test data generation, text/code diffing, cron-expression explanation, Base64/data-URI encoding, URL parameter editing, HTML entity escaping/unescaping, px ⇄ rem/em unit conversion, and HEX/RGB/HSL/OKLCH colour conversion with alpha compositing — the same logic that powers tools.first-ch.com.",
+  "version": "0.16.0",
+  "description": "MCP tools for WCAG contrast check, JP character/X-weight count, WebP conversion, JSON-LD generation, llms.txt generation, encoding/line-ending conversion, Marp Markdown→slide rendering, test data generation, text/code diffing, cron-expression explanation, Base64/data-URI encoding, URL parameter editing, HTML entity escaping/unescaping, px ⇄ rem/em unit conversion, HEX/RGB/HSL/OKLCH colour conversion with alpha compositing, and MD5/SHA-1/SHA-256/SHA-384/SHA-512 hashing with checksum verification — the same logic that powers tools.first-ch.com.",
   "author": {
     "name": "First CH LLC",
     "url": "https://first-ch.com"

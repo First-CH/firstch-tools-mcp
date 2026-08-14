@@ -23,6 +23,9 @@ import {
   colorConvert, clParseColor, clHex, clRgbStr, clHslStr, clOklchStr, clFlatten,
   clContrast, clPalette, clRgbToOklch, clOklchToRgb, ColorError,
 } from './color.mjs';
+import {
+  hashGenerate, hashBuffer, encodeDigest, normalizeText, parseExpected, digestMatches, HashError,
+} from './hash.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -1483,6 +1486,150 @@ assert.equal(over.x_postable, false);
   assert.throws(() => colorConvert({ color: '#fff', background: 'nope' }), ColorError);
   assert.throws(() => colorConvert({ color: '#fff', step: 0 }), ColorError);
   assert.throws(() => colorConvert({ color: '#fff', syntax: 'bogus' }), ColorError);
+}
+
+
+// ==================== hash_generate ====================
+{
+  // RFC 1321 (MD5) / RFC 3174 (SHA-1) / FIPS 180-4 の既知テストベクタ。
+  // site 側（site/hash/app.js の自前MD5実装）も同じ値になることをブラウザ側の検証で確認している。
+  const empty = hashBuffer(Buffer.alloc(0), ['md5', 'sha1', 'sha256', 'sha512']);
+  assert.equal(empty.md5.toString('hex'), 'd41d8cd98f00b204e9800998ecf8427e');
+  assert.equal(empty.sha1.toString('hex'), 'da39a3ee5e6b4b0d3255bfef95601890afd80709');
+  assert.equal(
+    empty.sha256.toString('hex'),
+    'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+  );
+
+  const abc = hashBuffer(Buffer.from('abc'), ['md5', 'sha1', 'sha256', 'sha384', 'sha512']);
+  assert.equal(abc.md5.toString('hex'), '900150983cd24fb0d6963f7d28e17f72');
+  assert.equal(abc.sha1.toString('hex'), 'a9993e364706816aba3e25717850c26c9cd0d89d');
+  assert.equal(
+    abc.sha256.toString('hex'),
+    'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad',
+  );
+  assert.equal(
+    abc.sha384.toString('hex'),
+    'cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7',
+  );
+
+  // RFC 1321 のテストスイートより
+  assert.equal(
+    hashBuffer(Buffer.from('message digest'), ['md5']).md5.toString('hex'),
+    'f96b697d7cb7938d525a2f31aaf161d0',
+  );
+  assert.equal(
+    hashBuffer(Buffer.from('The quick brown fox jumps over the lazy dog'), ['md5']).md5.toString('hex'),
+    '9e107d9d372bb6826bd81d3542a419d6',
+  );
+  // 64バイト境界をまたぐ入力（パディングの実装ミスが出やすい長さ）
+  assert.equal(
+    hashBuffer(Buffer.from('12345678901234567890123456789012345678901234567890123456789012345678901234567890'), ['md5']).md5.toString('hex'),
+    '57edf4a22be3c955ac49da2e2107b67a',
+  );
+
+  // 書式の変換
+  const sha256Hello = hashBuffer(Buffer.from('hello'), ['sha256']).sha256;
+  assert.equal(encodeDigest(sha256Hello, 'hex'), '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
+  assert.equal(encodeDigest(sha256Hello, 'HEX'), '2CF24DBA5FB0A30E26E83B2AC5B9E29E1B161E5C1FA7425E73043362938B9824');
+  assert.equal(encodeDigest(sha256Hello, 'base64'), 'LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=');
+  assert.equal(encodeDigest(sha256Hello, 'base64url'), 'LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ');
+
+  // 改行コード・BOM で対象のバイト列が変わる
+  assert.equal(normalizeText('a\nb').toString('hex'), '610a62');
+  assert.equal(normalizeText('a\nb', 'crlf').toString('hex'), '610d0a62');
+  assert.equal(normalizeText('a\r\nb', 'lf').toString('hex'), '610a62');
+  assert.equal(normalizeText('a', 'lf', true).toString('hex'), 'efbbbf61');
+
+  // 期待値の読み取り: コマンドの出力をそのまま渡せる
+  const md5Hello = '5d41402abc4b2a76b9719d911017c592';
+  assert.deepEqual(parseExpected(md5Hello), { value: md5Hello, kind: 'hex', bits: 128 });
+  assert.equal(parseExpected(md5Hello.toUpperCase()).value, md5Hello);
+  assert.equal(parseExpected(`${md5Hello}  hello.txt`).value, md5Hello);
+  assert.equal(parseExpected(`${md5Hello} *hello.txt`).value, md5Hello);
+  assert.equal(parseExpected(`md5:${md5Hello}`).value, md5Hello);
+  assert.equal(parseExpected(`MD5 (hello.txt) = ${md5Hello}`).value, md5Hello);
+  assert.equal(parseExpected('5d:41:40:2a:bc:4b:2a:76:b9:71:9d:91:10:17:c5:92').value, md5Hello);
+  assert.equal(parseExpected('').kind, '');
+  assert.equal(parseExpected('not a hash at all').kind, '');
+  // base64 / base64url はどちらも同じ標準形へ寄せる
+  assert.equal(parseExpected('LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=').kind, 'base64');
+  assert.equal(
+    parseExpected('LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ').value,
+    'LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ',
+  );
+  assert.equal(parseExpected('LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ').bits, 256);
+  assert.ok(digestMatches(sha256Hello, parseExpected('LPJNul-wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ')));
+  assert.ok(digestMatches(sha256Hello, parseExpected('2CF24DBA5FB0A30E26E83B2AC5B9E29E1B161E5C1FA7425E73043362938B9824')));
+
+  // hashGenerate 本体（テキスト）
+  const t = await hashGenerate({ text: 'hello' });
+  assert.deepEqual(t.algorithms, ['md5', 'sha1', 'sha256', 'sha512']);
+  assert.equal(t.hashes.md5, md5Hello);
+  assert.equal(t.hashes.sha256, '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
+  assert.equal(t.hashes.sha384, undefined);
+  assert.equal(t.source.bytes, 5);
+  assert.equal(t.verification, undefined);
+  assert.ok(t.notes.some((n) => n.includes('SHA-1')));
+
+  // アルゴリズム・書式の指定
+  const one = await hashGenerate({ text: 'hello', algorithms: ['sha256'], format: 'base64' });
+  assert.deepEqual(one.algorithms, ['sha256']);
+  assert.equal(one.hashes.sha256, 'LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=');
+  // MD5/SHA-1 を含めなければ「壊れている」の注意は出さない
+  assert.ok(!one.notes.some((n) => n.includes('衝突耐性')));
+
+  // 照合: 一致 / 不一致 / 読めない
+  const hit = await hashGenerate({ text: 'hello', expected: `${md5Hello}  hello.txt` });
+  assert.equal(hit.verification.matched, true);
+  assert.equal(hit.verification.algorithm, 'md5');
+  const miss = await hashGenerate({ text: 'HELLO', expected: md5Hello });
+  assert.equal(miss.verification.matched, false);
+  assert.equal(miss.verification.algorithm, 'md5');
+  const unreadable = await hashGenerate({ text: 'hello', expected: 'nope' });
+  assert.equal(unreadable.verification.matched, false);
+  assert.equal(unreadable.verification.expected_format, 'unrecognized');
+  // 算出していないアルゴリズムの桁数を渡された場合
+  const other = await hashGenerate({ text: 'hello', algorithms: ['md5'], expected: 'a'.repeat(64) });
+  assert.equal(other.verification.matched, false);
+  assert.equal(other.verification.algorithm, null);
+
+  // CRLF / BOM は結果を変え、notes に出る
+  const crlf = await hashGenerate({ text: 'a\nb', newline: 'crlf' });
+  const lf = await hashGenerate({ text: 'a\nb' });
+  assert.notEqual(crlf.hashes.sha256, lf.hashes.sha256);
+  assert.equal(crlf.source.bytes, 4);
+  assert.ok(crlf.notes.some((n) => n.includes('CRLF')));
+  const bom = await hashGenerate({ text: 'a', bom: true });
+  assert.equal(bom.source.bytes, 4);
+  assert.ok(bom.notes.some((n) => n.includes('BOM')));
+
+  // ファイル入力（テキストと同じ値になること・照合が効くこと）
+  {
+    const { writeFile, rm, mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const dir = await mkdtemp(join(tmpdir(), 'firstch-hash-'));
+    const file = join(dir, 'hello.txt');
+    await writeFile(file, 'hello');
+    const f = await hashGenerate({ path: file, expected: md5Hello });
+    assert.equal(f.hashes.md5, md5Hello);
+    assert.equal(f.source.type, 'file');
+    assert.equal(f.source.name, 'hello.txt');
+    assert.equal(f.source.bytes, 5);
+    assert.equal(f.verification.matched, true);
+    // newline / bom はファイルには効かない（中身をそのまま読む）
+    const f2 = await hashGenerate({ path: file, newline: 'crlf', bom: true });
+    assert.equal(f2.hashes.md5, md5Hello);
+    await rm(dir, { recursive: true, force: true });
+  }
+
+  // 不正な入力は HashError
+  await assert.rejects(() => hashGenerate({}), HashError);
+  await assert.rejects(() => hashGenerate({ text: 'a', path: '/tmp/x' }), HashError);
+  await assert.rejects(() => hashGenerate({ text: 'a', algorithms: ['sha3'] }), HashError);
+  await assert.rejects(() => hashGenerate({ text: 'a', format: 'bogus' }), HashError);
+  await assert.rejects(() => hashGenerate({ text: 'a', newline: 'cr' }), HashError);
 }
 
 

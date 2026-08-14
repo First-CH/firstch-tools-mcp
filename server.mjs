@@ -18,6 +18,7 @@ import { htmlEscape } from './html-escape.mjs';
 import { jsonToYaml, yamlToJson } from './json-yaml.mjs';
 import { pxRemConvert } from './px-rem.mjs';
 import { colorConvert } from './color.mjs';
+import { hashGenerate } from './hash.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -685,6 +686,49 @@ server.registerTool(
   async (opts) => {
     await logUsage('color_convert');
     return asText(colorConvert(opts));
+  },
+);
+
+server.registerTool(
+  'hash_generate',
+  {
+    title: 'MD5 / SHA-1 / SHA-256 / SHA-384 / SHA-512 ハッシュ生成・照合',
+    description:
+      'テキストまたはファイルの MD5・SHA-1・SHA-256・SHA-384・SHA-512 ハッシュ値を一度に算出する' +
+      '（tools.first-ch.com/hash/ と同一の仕様）。' +
+      'ダウンロードしたファイルが配布元のチェックサムと一致するかの確認、変更の検出、' +
+      'APIリクエストの署名計算の下ごしらえ、キャッシュキーの生成といった用途に使う。' +
+      'expected に期待値を渡すと桁数から対象のアルゴリズムを判定して照合し、一致したかどうかを返す。' +
+      'expected は `sha256sum` の出力（`<ハッシュ値>␣␣<ファイル名>`）・`SHA256 (file) = …`・' +
+      '`sha256:` のような接頭辞付き・コロン区切りの16進・Base64 をそのまま渡せる。' +
+      '出力は16進の小文字/大文字・Base64・base64url を選べる。' +
+      'text は改行コード（lf / crlf）とUTF-8のBOMの有無を指定できるので、Windowsで作られたファイルの' +
+      '値も再現できる（文字コードはUTF-8固定）。ファイルは大きくてもストリームで1パス処理する。' +
+      'MD5とSHA-1は衝突耐性が破られており署名・改ざん検知には使えないこと、ハッシュ値をそのまま' +
+      'パスワード保存に使ってはいけないこと（ソルト付きのbcrypt / scrypt / Argon2を使う）は notes で知らせる。' +
+      '完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      text: z.string().optional().describe('ハッシュ値を計算するテキスト（path と排他）'),
+      path: z.string().optional().describe('ハッシュ値を計算するファイルの絶対パス（text と排他）'),
+      algorithms: z
+        .array(z.enum(['md5', 'sha1', 'sha256', 'sha384', 'sha512']))
+        .optional()
+        .describe('算出するアルゴリズム（既定 ["md5","sha1","sha256","sha512"]）'),
+      format: z
+        .enum(['hex', 'HEX', 'base64', 'base64url'])
+        .optional()
+        .describe('出力の書式（既定 hex=16進の小文字 / HEX=16進の大文字 / base64 / base64url）'),
+      newline: z
+        .enum(['lf', 'crlf'])
+        .optional()
+        .describe('text の改行コード（既定 lf。Windowsのファイルと突き合わせるなら crlf。path には影響しない）'),
+      bom: z.boolean().optional().describe('text の先頭にUTF-8のBOMを付けるか（既定 false。path には影響しない）'),
+      expected: z.string().optional().describe('照合するハッシュ値（コマンドの出力をそのまま渡してよい）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('hash_generate');
+    return asText(await hashGenerate(opts));
   },
 );
 
