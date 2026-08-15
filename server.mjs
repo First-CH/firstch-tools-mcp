@@ -19,6 +19,7 @@ import { jsonToYaml, yamlToJson } from './json-yaml.mjs';
 import { pxRemConvert } from './px-rem.mjs';
 import { colorConvert } from './color.mjs';
 import { hashGenerate } from './hash.mjs';
+import { jwtDecode } from './jwt.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -729,6 +730,43 @@ server.registerTool(
   async (opts) => {
     await logUsage('hash_generate');
     return asText(await hashGenerate(opts));
+  },
+);
+
+server.registerTool(
+  'jwt_decode',
+  {
+    title: 'JWTのデコード・有効期限チェック・署名の検証',
+    description:
+      'JWT（JSON Web Token）をデコードしてヘッダーとペイロードを返し、有効期限（exp / nbf / iat）を判定する' +
+      '（tools.first-ch.com/jwt/ と同一の仕様）。' +
+      '開発中の認証トークンの中身の確認、「なぜ401になるのか」の切り分け、期限切れかどうかの判定に使う。' +
+      'token は `Authorization: Bearer <token>` のヘッダー1行のまま渡してよい（前後の引用符・改行も除去する）。' +
+      'key を渡すと署名も検証する: HS256/384/512 は共有鍵の文字列（keyEncoding で base64url / hex も可）、' +
+      'RS・PS・ES・EdDSA は SPKI形式のPEM公開鍵、またはJWK / JWKS のJSON（JWKSはヘッダーの kid で自動的に選ぶ）。' +
+      '秘密鍵・証明書・PKCS#1 を渡した場合は検証せず、正しい取り出し方を返す。' +
+      'clockTolerance で時計のズレを秒単位で許容でき、now でUNIX秒の現在時刻を固定できる（再現テスト用）。' +
+      'alg:none・署名なし・期限切れ・nbfが未来・expがミリ秒（Date.now()の入れ間違い）・有効期間が長すぎる・' +
+      'ペイロードに秘密情報や個人情報が入っている、といった落とし穴は warnings で知らせる。' +
+      '5セグメントのJWE（暗号化トークン）はヘッダーのみ返す（復号は行わない）。' +
+      '完全ローカル処理・ネットワーク送信なし（JWKSの取得も行わないので、鍵は呼び出し側が渡す）。',
+    inputSchema: {
+      token: z.string().describe('デコードするJWT（`Authorization: Bearer …` の1行のままでも可）'),
+      key: z
+        .string()
+        .optional()
+        .describe('署名の検証に使う鍵。HS*は共有鍵の文字列、その他はPEM公開鍵かJWK / JWKSのJSON（省略すると検証しない）'),
+      keyEncoding: z
+        .enum(['utf8', 'base64url', 'base64', 'hex'])
+        .optional()
+        .describe('HS* の共有鍵の読み方（既定 utf8＝そのままの文字列）'),
+      clockTolerance: z.number().optional().describe('許容する時計のズレ（秒。既定0）'),
+      now: z.number().optional().describe('判定に使う現在時刻（UNIX秒。既定は実時刻）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('jwt_decode');
+    return asText(await jwtDecode(opts));
   },
 );
 

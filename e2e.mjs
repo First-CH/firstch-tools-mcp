@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 18 registered tools, and `tools/call` actually executes handlers
+// returns all 19 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -69,6 +69,7 @@ try {
     'html_escape',
     'json_to_yaml',
     'jsonld_generate',
+    'jwt_decode',
     'llmstxt_generate',
     'marp_render',
     'px_rem_convert',
@@ -319,6 +320,26 @@ try {
 
   const hashErr = await request('tools/call', { name: 'hash_generate', arguments: {} }, 37);
   assert.ok(hashErr.result?.isError, `hash_generate should require text or path: ${JSON.stringify(hashErr)}`);
+
+  // jwt_decode: HS256のトークンをデコードし、期限と署名を判定する
+  // （固定のトークン。now を渡して判定時刻を固定するので、時間が経っても結果は変わらない）
+  const jwtTok = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9'
+    + '.eyJzdWIiOiIxMjM0NTY3ODkwIiwiaXNzIjoiaHR0cHM6Ly9hdXRoLmV4YW1wbGUuY29tLyIsImlhdCI6MTc4Njc4NDQwMCwiZXhwIjoxNzg2Nzg4MDAwfQ'
+    + '.KVvjU3NS8y9w9bwIAyLzQB-WMs5QIxsl3vTqgfDrhlc';
+  const jwtRes = await callTool('jwt_decode', { token: 'Bearer ' + jwtTok, key: 'firstch-tools-demo-secret-2026', now: 1786786000 }, 38);
+  assert.equal(jwtRes.header?.alg, 'HS256', `jwt_decode header mismatch: ${JSON.stringify(jwtRes.header)}`);
+  assert.equal(jwtRes.payload?.sub, '1234567890', `jwt_decode payload mismatch: ${JSON.stringify(jwtRes.payload)}`);
+  assert.equal(jwtRes.expiry?.status, 'valid', `jwt_decode expiry mismatch: ${JSON.stringify(jwtRes.expiry)}`);
+  assert.equal(jwtRes.expiry?.remaining_seconds, 2000, `jwt_decode remaining mismatch: ${JSON.stringify(jwtRes.expiry)}`);
+  assert.equal(jwtRes.verification?.status, 'verified', `jwt_decode verification mismatch: ${JSON.stringify(jwtRes.verification)}`);
+
+  // 同じトークンを期限後に見ると expired、鍵が違えば failed
+  const jwtExp = await callTool('jwt_decode', { token: jwtTok, key: 'wrong-secret', now: 1786790000 }, 39);
+  assert.equal(jwtExp.expiry?.status, 'expired', `jwt_decode should be expired: ${JSON.stringify(jwtExp.expiry)}`);
+  assert.equal(jwtExp.verification?.status, 'failed', `jwt_decode should not verify: ${JSON.stringify(jwtExp.verification)}`);
+
+  const jwtErr = await request('tools/call', { name: 'jwt_decode', arguments: {} }, 40);
+  assert.ok(jwtErr.result?.isError, `jwt_decode should require a token: ${JSON.stringify(jwtErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

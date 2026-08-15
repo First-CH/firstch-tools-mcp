@@ -26,6 +26,10 @@ import {
 import {
   hashGenerate, hashBuffer, encodeDigest, normalizeText, parseExpected, digestMatches, HashError,
 } from './hash.mjs';
+import {
+  jwtDecode, decodeJwt, normalizeInput, analyzeTiming, verifySignature,
+  b64uToBytes, formatDuration, JwtError,
+} from './jwt.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -1630,6 +1634,179 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => hashGenerate({ text: 'a', algorithms: ['sha3'] }), HashError);
   await assert.rejects(() => hashGenerate({ text: 'a', format: 'bogus' }), HashError);
   await assert.rejects(() => hashGenerate({ text: 'a', newline: 'cr' }), HashError);
+}
+
+// ==================== jwt_decode ====================
+{
+  const { createHmac, generateKeyPairSync, sign: nodeSign } = await import('node:crypto');
+  const b64u = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+
+  // RFC 7519 §3.1 の例（HS256・secret は "your-256-bit-secret" ではなく RFC の鍵ではないので
+  // 署名は自前で作る）。まずはデコードだけを既知の値と突き合わせる
+  const tok = b64u({ alg: 'HS256', typ: 'JWT' }) + '.' + b64u({ iss: 'joe', exp: 1300819380, 'http://example.com/is_root': true }) + '.sig';
+  const d = decodeJwt(tok);
+  assert.equal(d.ok, true);
+  assert.equal(d.type, 'jws');
+  assert.equal(d.header.alg, 'HS256');
+  assert.equal(d.payload.iss, 'joe');
+  assert.equal(d.payload.exp, 1300819380);
+  assert.equal(d.signature, 'sig');
+
+  // 入力の掃除: Authorization ヘッダー・Bearer・引用符・改行・末尾のカンマ
+  assert.deepEqual(normalizeInput('Authorization: Bearer abc.def.ghi').token, 'abc.def.ghi');
+  assert.deepEqual(normalizeInput('  "abc.def.ghi",  ').token, 'abc.def.ghi');
+  assert.deepEqual(normalizeInput('abc.\ndef.\nghi').token, 'abc.def.ghi');
+  assert.deepEqual(normalizeInput('Bearer abc.def.ghi').cleanups, ['bearer']);
+
+  // base64url は標準Base64・パディング付きも受け入れる／長さが4n+1のものは弾く
+  assert.equal(b64uToBytes('aGVsbG8').toString(), 'hello');
+  assert.equal(b64uToBytes('aGVsbG8=').toString(), 'hello');
+  assert.throws(() => b64uToBytes('aaaaa'), JwtError);
+
+  // 有効期限の判定（now を固定）
+  const now = 1786784400;
+  const t1 = analyzeTiming({ iat: now - 600, exp: now + 600 }, now, 0);
+  assert.equal(t1.status, 'valid');
+  assert.equal(t1.remaining, 600);
+  assert.equal(t1.lifetime, 1200);
+  assert.equal(t1.progress, 0.5);
+  assert.equal(analyzeTiming({ exp: now - 1 }, now, 0).status, 'expired');
+  // 許容するズレを与えると期限切れの判定が後ろへずれる
+  assert.equal(analyzeTiming({ exp: now - 30 }, now, 60).status, 'valid');
+  assert.equal(analyzeTiming({ exp: now + 100, nbf: now + 50 }, now, 0).status, 'not_yet');
+  assert.equal(analyzeTiming({ sub: 'a' }, now, 0).status, 'no_exp');
+  // ミリ秒で入っている exp は秒へ直したうえで ms フラグを立てる
+  const tms = analyzeTiming({ exp: 1786788000000 }, now, 0);
+  assert.equal(tms.expMs, true);
+  assert.equal(tms.exp, 1786788000);
+  // 文字列の数値も読む
+  assert.equal(analyzeTiming({ exp: '1786788000' }, now, 0).exp, 1786788000);
+
+  assert.equal(formatDuration(0), '0秒');
+  assert.equal(formatDuration(90), '1分30秒');
+  assert.equal(formatDuration(3600), '1時間');
+  assert.equal(formatDuration(86400 * 2 + 3600 * 3 + 60), '2日3時間');
+
+  // HS256: 署名して検証する（node:crypto の HMAC と webcrypto の突合にもなる）
+  const secret = 'firstch-tools-demo-secret-2026';
+  const si = b64u({ alg: 'HS256', typ: 'JWT' }) + '.' + b64u({ sub: 'x', exp: now + 3600 });
+  const hs = si + '.' + createHmac('sha256', secret).update(si).digest('base64url');
+
+  const okRes = await jwtDecode({ token: hs, key: secret, now });
+  assert.equal(okRes.verification.status, 'verified');
+  assert.equal(okRes.expiry.status, 'valid');
+  assert.equal(okRes.expiry.remaining_seconds, 3600);
+  assert.equal(okRes.header.alg, 'HS256');
+  assert.equal(okRes.payload.sub, 'x');
+  // 検証できたら「検証していません」の指摘は出さない
+  assert.equal(okRes.warnings.some((w) => w.includes('デコードは署名の検証ではありません')), false);
+
+  const ngRes = await jwtDecode({ token: hs, key: 'wrong', now });
+  assert.equal(ngRes.verification.status, 'failed');
+  assert.ok(ngRes.verification.message.includes('一致しません'));
+
+  // 鍵を渡さなければ検証しない（skipped）
+  const skipRes = await jwtDecode({ token: hs, now });
+  assert.equal(skipRes.verification.status, 'skipped');
+  assert.ok(skipRes.warnings.some((w) => w.includes('デコードは署名の検証ではありません')));
+
+  // 共有鍵の読み方（base64url / hex）
+  const rawKey = Buffer.from('0123456789abcdef0123456789abcdef');
+  const si2 = b64u({ alg: 'HS256' }) + '.' + b64u({ sub: 'y', exp: now + 60 });
+  const hs2 = si2 + '.' + createHmac('sha256', rawKey).update(si2).digest('base64url');
+  assert.equal((await jwtDecode({ token: hs2, key: rawKey.toString('base64url'), keyEncoding: 'base64url', now })).verification.status, 'verified');
+  assert.equal((await jwtDecode({ token: hs2, key: rawKey.toString('hex'), keyEncoding: 'hex', now })).verification.status, 'verified');
+  // oct の JWK でも検証できる
+  assert.equal((await jwtDecode({ token: hs2, key: JSON.stringify({ kty: 'oct', k: rawKey.toString('base64url') }), now })).verification.status, 'verified');
+  // 短い共有鍵は検証が通っても弱さを知らせる
+  const shortRes = await jwtDecode({ token: hs, key: secret, now });
+  assert.ok(shortRes.verification.warning.includes('RFC 7518'));
+
+  // RS256: PEM公開鍵で検証する
+  const rsa = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const rsSi = b64u({ alg: 'RS256', typ: 'JWT' }) + '.' + b64u({ sub: 'r', exp: now + 60 });
+  const rs = rsSi + '.' + nodeSign('sha256', Buffer.from(rsSi), rsa.privateKey).toString('base64url');
+  const rsPem = rsa.publicKey.export({ type: 'spki', format: 'pem' });
+  assert.equal((await jwtDecode({ token: rs, key: rsPem, now })).verification.status, 'verified');
+  // 公開鍵のJWKでも検証できる
+  assert.equal((await jwtDecode({ token: rs, key: JSON.stringify(rsa.publicKey.export({ format: 'jwk' })), now })).verification.status, 'verified');
+
+  // ES256: JWS の署名は R‖S の生の形（DER ではない）
+  const ec = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const esSi = b64u({ alg: 'ES256', typ: 'JWT', kid: 'k2' }) + '.' + b64u({ sub: 'e', exp: now + 60 });
+  const es = esSi + '.' + nodeSign('sha256', Buffer.from(esSi), { key: ec.privateKey, dsaEncoding: 'ieee-p1363' }).toString('base64url');
+  const ecJwk = ec.publicKey.export({ format: 'jwk' });
+  assert.equal((await jwtDecode({ token: es, key: JSON.stringify(ecJwk), now })).verification.status, 'verified');
+  // JWKS からは kid で選ぶ
+  const other = generateKeyPairSync('ec', { namedCurve: 'P-256' }).publicKey.export({ format: 'jwk' });
+  const jwks = JSON.stringify({ keys: [{ ...other, kid: 'k1' }, { ...ecJwk, kid: 'k2' }] });
+  assert.equal((await jwtDecode({ token: es, key: jwks, now })).verification.status, 'verified');
+  // kid が合わなければ先頭の鍵を使い、一致しない
+  assert.equal((await jwtDecode({ token: es, key: JSON.stringify({ keys: [{ ...other, kid: 'k9' }] }), now })).verification.status, 'failed');
+  // DER形式の署名は長さで弾く
+  const esDer = esSi + '.' + nodeSign('sha256', Buffer.from(esSi), ec.privateKey).toString('base64url');
+  const derRes = await jwtDecode({ token: esDer, key: JSON.stringify(ecJwk), now });
+  assert.equal(derRes.verification.status, 'error');
+  assert.ok(derRes.verification.message.includes('R‖S'));
+
+  // EdDSA
+  const ed = generateKeyPairSync('ed25519');
+  const edSi = b64u({ alg: 'EdDSA', typ: 'JWT' }) + '.' + b64u({ sub: 'd', exp: now + 60 });
+  const edTok = edSi + '.' + nodeSign(null, Buffer.from(edSi), ed.privateKey).toString('base64url');
+  assert.equal((await jwtDecode({ token: edTok, key: ed.publicKey.export({ type: 'spki', format: 'pem' }), now })).verification.status, 'verified');
+
+  // 秘密鍵・証明書・PKCS#1 は検証せず案内を返す
+  const priv = await jwtDecode({ token: rs, key: rsa.privateKey.export({ type: 'pkcs8', format: 'pem' }), now });
+  assert.equal(priv.verification.status, 'error');
+  assert.ok(priv.verification.message.includes('公開鍵'));
+  const p1 = await jwtDecode({ token: rs, key: '-----BEGIN RSA PUBLIC KEY-----\nMIIB\n-----END RSA PUBLIC KEY-----', now });
+  assert.ok(p1.verification.message.includes('PKCS#1'));
+  const cert = await jwtDecode({ token: rs, key: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----', now });
+  assert.ok(cert.verification.message.includes('openssl x509'));
+
+  // alg: none は検証しない
+  const noneTok = b64u({ alg: 'none', typ: 'JWT' }) + '.' + b64u({ sub: 'a', admin: true }) + '.';
+  const noneRes = await jwtDecode({ token: noneTok, key: 'anything', now });
+  assert.equal(noneRes.verification.status, 'error');
+  assert.ok(noneRes.warnings.some((w) => w.includes('alg: none')));
+  assert.ok(noneRes.warnings.some((w) => w.includes('自然には失効しません')));
+
+  // 指摘事項: 期限切れ・ミリ秒・秘密情報・長すぎる有効期間
+  const expired = await jwtDecode({ token: b64u({ alg: 'HS256' }) + '.' + b64u({ exp: now - 3600 }) + '.x', now });
+  assert.equal(expired.expiry.status, 'expired');
+  assert.ok(expired.warnings.some((w) => w.includes('1時間 前に期限切れ')));
+  const msTok = await jwtDecode({ token: b64u({ alg: 'HS256' }) + '.' + b64u({ exp: (now + 60) * 1000 }) + '.x', now });
+  assert.ok(msTok.warnings.some((w) => w.includes('ミリ秒')));
+  const secretTok = await jwtDecode({ token: b64u({ alg: 'HS256' }) + '.' + b64u({ sub: 'a', password: 'p', exp: now + 60 }) + '.x', now });
+  assert.ok(secretTok.warnings.some((w) => w.includes('password')));
+  const longTok = await jwtDecode({ token: b64u({ alg: 'HS256' }) + '.' + b64u({ iat: now, exp: now + 86400 * 400 }) + '.x', now });
+  assert.ok(longTok.warnings.some((w) => w.includes('長すぎます')));
+
+  // クレームの説明と日時
+  const claims = (await jwtDecode({ token: hs, now })).claims;
+  const sub = claims.find((c) => c.name === 'sub');
+  assert.equal(sub.in, 'payload');
+  assert.ok(sub.meaning.includes('Subject'));
+  const expClaim = claims.find((c) => c.name === 'exp');
+  assert.equal(expClaim.datetime, new Date((now + 3600) * 1000).toISOString());
+
+  // JWE はヘッダーだけ返す
+  const jwe = await jwtDecode({ token: b64u({ alg: 'RSA-OAEP', enc: 'A256GCM' }) + '.a.b.c.d', now });
+  assert.equal(jwe.format, 'jwe');
+  assert.equal(jwe.header.enc, 'A256GCM');
+  assert.equal(jwe.payload, null);
+  assert.ok(jwe.warnings.some((w) => w.includes('JWE')));
+
+  // JWTでない入力
+  const bad = await jwtDecode({ token: 'hello world', now });
+  assert.equal(bad.decoded, false);
+  assert.ok(bad.warnings.some((w) => w.includes('JWTとして読めません')));
+
+  // 不正な引数は JwtError
+  await assert.rejects(() => jwtDecode({}), JwtError);
+  await assert.rejects(() => jwtDecode({ token: '   ' }), JwtError);
+  await assert.rejects(() => jwtDecode({ token: hs, keyEncoding: 'rot13' }), JwtError);
+  await assert.rejects(() => jwtDecode({ token: hs, clockTolerance: -1 }), JwtError);
 }
 
 
