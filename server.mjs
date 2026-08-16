@@ -20,6 +20,7 @@ import { pxRemConvert } from './px-rem.mjs';
 import { colorConvert } from './color.mjs';
 import { hashGenerate } from './hash.mjs';
 import { jwtDecode } from './jwt.mjs';
+import { userAgentParse } from './user-agent.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -767,6 +768,44 @@ server.registerTool(
   async (opts) => {
     await logUsage('jwt_decode');
     return asText(await jwtDecode(opts));
+  },
+);
+
+server.registerTool(
+  'user_agent_parse',
+  {
+    title: 'User-Agent文字列の解析とデバイス判定',
+    description:
+      'User-Agent文字列から、ブラウザ名とバージョン・レンダリングエンジン・OSとそのバージョン・' +
+      'デバイス種別（desktop / mobile / tablet / tv / console / wearable / bot）・メーカーと機種・' +
+      'CPUアーキテクチャを判定する（tools.first-ch.com/user-agent/ と同一の仕様）。' +
+      'アクセスログの調査、問い合わせに付いてきたUAの読み解き、対応ブラウザの棚卸しに使う。' +
+      'ua はアクセスログの行のまま渡してよい（先頭の `User-Agent:`・前後の引用符・末尾のカンマは除去する）。' +
+      'uas に配列を渡すと複数件をまとめて解析し、ブラウザ・OS・デバイス種別の内訳を summary で返す。' +
+      '判定は「より限定的なトークンから先に試す」順序で行う（Edg/ → OPR/ → Chrome/ → Safari/）。' +
+      'Chrome・Edge・Opera はいずれも `Safari/` と `Chrome/` を名乗るため、部分一致では取り違える。' +
+      'tokens でUA文字列をトークン単位に分解し、`Mozilla/5.0` や `KHTML, like Gecko` のような化石の意味を返す。' +
+      'notes では「UAでは分からないこと」を知らせる: Chrome 110以降の削減済みUA（マイナー版は 0.0.0、' +
+      'Androidの機種名は `K` に凍結）、macOSが常に 10.15.7 を名乗ること、Windows 10と11が区別できないこと、' +
+      'iPadがMac版Safariと同じUAを送ること、アプリ内ブラウザ（LINE / Instagram / Facebook / Android WebView）、' +
+      'そしてUAは誰でも名乗れるためアクセス制御の根拠にできないこと。' +
+      'Googlebot・GPTBot・ClaudeBot などのクローラーや curl・python-requests のHTTPクライアントも判定する。' +
+      '完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      ua: z.string().optional().describe('解析するUser-Agent文字列（`User-Agent:` 付きのログ1行のままでも可）'),
+      uas: z
+        .array(z.string())
+        .optional()
+        .describe('複数件をまとめて解析する場合のUA文字列の配列（内訳の集計 summary が付く。ua とは併用しない）'),
+      includeTokens: z
+        .boolean()
+        .optional()
+        .describe('uas で解析するときにトークン内訳を含めるか（既定: 20件以下なら含める）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('user_agent_parse');
+    return asText(userAgentParse(opts));
   },
 );
 

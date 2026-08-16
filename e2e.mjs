@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 19 registered tools, and `tools/call` actually executes handlers
+// returns all 20 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -75,6 +75,7 @@ try {
     'px_rem_convert',
     'testdata_generate',
     'url_params',
+    'user_agent_parse',
     'webp_convert',
     'yaml_to_json',
   ];
@@ -340,6 +341,34 @@ try {
 
   const jwtErr = await request('tools/call', { name: 'jwt_decode', arguments: {} }, 40);
   assert.ok(jwtErr.result?.isError, `jwt_decode should require a token: ${JSON.stringify(jwtErr)}`);
+
+  // user_agent_parse: Edge のUAを、Chrome や Safari と取り違えずに判定する
+  const uaRes = await callTool('user_agent_parse', {
+    ua: 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36 Edg/139.0.0.0',
+  }, 41);
+  assert.equal(uaRes.browser?.name, 'Microsoft Edge', `user_agent_parse browser mismatch: ${JSON.stringify(uaRes.browser)}`);
+  assert.equal(uaRes.engine?.name, 'Blink', `user_agent_parse engine mismatch: ${JSON.stringify(uaRes.engine)}`);
+  assert.equal(uaRes.os?.name, 'Windows', `user_agent_parse os mismatch: ${JSON.stringify(uaRes.os)}`);
+  assert.equal(uaRes.device?.type, 'desktop', `user_agent_parse device mismatch: ${JSON.stringify(uaRes.device)}`);
+  assert.equal(uaRes.is_bot, false, `user_agent_parse should not be a bot: ${JSON.stringify(uaRes.bot)}`);
+  assert.ok(
+    uaRes.notes?.some((n) => n.code === 'win_10_11'),
+    `user_agent_parse should flag Windows 10/11: ${JSON.stringify(uaRes.notes)}`,
+  );
+
+  // 複数件は内訳付きで返す
+  const uaMany = await callTool('user_agent_parse', {
+    uas: [
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1',
+      'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+    ],
+  }, 42);
+  assert.equal(uaMany.count, 2, `user_agent_parse count mismatch: ${JSON.stringify(uaMany.count)}`);
+  assert.equal(uaMany.summary?.bots, 1, `user_agent_parse bot count mismatch: ${JSON.stringify(uaMany.summary)}`);
+  assert.equal(uaMany.summary?.device_types?.mobile, 1, `user_agent_parse device summary mismatch: ${JSON.stringify(uaMany.summary)}`);
+
+  const uaErr = await request('tools/call', { name: 'user_agent_parse', arguments: {} }, 43);
+  assert.ok(uaErr.result?.isError, `user_agent_parse should require ua or uas: ${JSON.stringify(uaErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

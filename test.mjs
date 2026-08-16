@@ -27,6 +27,10 @@ import {
   hashGenerate, hashBuffer, encodeDigest, normalizeText, parseExpected, digestMatches, HashError,
 } from './hash.mjs';
 import {
+  userAgentParse, parseUserAgent, tokenizeUA, detectBrowser, detectEngine, detectOS,
+  detectDevice, detectBot, detectInApp, UserAgentError,
+} from './user-agent.mjs';
+import {
   jwtDecode, decodeJwt, normalizeInput, analyzeTiming, verifySignature,
   b64uToBytes, formatDuration, JwtError,
 } from './jwt.mjs';
@@ -1807,6 +1811,165 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => jwtDecode({ token: '   ' }), JwtError);
   await assert.rejects(() => jwtDecode({ token: hs, keyEncoding: 'rot13' }), JwtError);
   await assert.rejects(() => jwtDecode({ token: hs, clockTolerance: -1 }), JwtError);
+}
+
+
+// ==================== user_agent_parse ====================
+{
+  // site/user-agent/app.js と同じ判定結果になることを、代表的なUAで確かめる
+  // （実ブラウザ側は site/_t の DOM 突合で同じ期待値を検証している）
+  const CASES = [
+    ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+      { browser: 'Google Chrome', major: '139', engine: 'Blink', os: 'Windows', osv: '10 / 11', type: 'desktop', cpu: 'x86-64 (64bit)' }],
+    ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36 Edg/139.0.0.0',
+      { browser: 'Microsoft Edge', engine: 'Blink', os: 'Windows', type: 'desktop' }],
+    ['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 OPR/106.0.0.0',
+      { browser: 'Opera', version: '106.0.0.0', engine: 'Blink' }],
+    ['Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15',
+      { browser: 'Safari', version: '18.5', engine: 'WebKit', os: 'macOS', osv: '10.15.7', type: 'desktop' }],
+    ['Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1',
+      { browser: 'Safari', engine: 'WebKit', os: 'iOS', osv: '18.5', type: 'mobile', vendor: 'Apple', model: 'iPhone' }],
+    ['Mozilla/5.0 (iPad; CPU OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1',
+      { os: 'iPadOS', osv: '18.5', type: 'tablet', vendor: 'Apple', model: 'iPad' }],
+    ['Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/139.0.0.0 Mobile/15E148 Safari/604.1',
+      { browser: 'Google Chrome', platform: 'iOS', engine: 'WebKit', os: 'iOS', type: 'mobile' }],
+    ['Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36',
+      { browser: 'Google Chrome', engine: 'Blink', os: 'Android', osv: '10', type: 'mobile', model: 'K' }],
+    ['Mozilla/5.0 (Linux; Android 13; Pixel 7 Build/TQ3A.230805.001) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.43 Mobile Safari/537.36',
+      { os: 'Android', osv: '13', type: 'mobile', vendor: 'Google', model: 'Pixel 7' }],
+    // Android は Mobile の有無だけがスマートフォンとタブレットの境目
+    ['Mozilla/5.0 (Linux; Android 13; SM-X710) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      { type: 'tablet', vendor: 'Samsung', model: 'SM-X710' }],
+    ['Mozilla/5.0 (Linux; Android 13; SM-G991B Build/TP1A; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/120.0.0.0 Mobile Safari/537.36',
+      { browser: 'Android WebView', os: 'Android', type: 'mobile', vendor: 'Samsung' }],
+    ['Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/23.0 Chrome/115.0.0.0 Mobile Safari/537.36',
+      { browser: 'Samsung Internet', version: '23.0', engine: 'Blink', type: 'mobile', vendor: 'Samsung' }],
+    ['Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:141.0) Gecko/20100101 Firefox/141.0',
+      { browser: 'Firefox', version: '141.0', engine: 'Gecko', os: 'Windows', type: 'desktop' }],
+    ['Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko',
+      { browser: 'Internet Explorer', version: '11.0', engine: 'Trident', os: 'Windows', osv: '7', type: 'desktop' }],
+    ['Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/139.0.0.0 Safari/537.36',
+      { browser: 'Headless Chrome', engine: 'Blink', os: 'Linux', type: 'desktop' }],
+    ['Mozilla/5.0 (PlayStation; PlayStation 5/6.50) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15',
+      { type: 'console', vendor: 'Sony' }],
+    ['Mozilla/5.0 (SMART-TV; LINUX; Tizen 6.0) AppleWebKit/537.36 (KHTML, like Gecko) Version/6.0 TV Safari/537.36',
+      { type: 'tv', vendor: 'Samsung', os: 'Tizen' }],
+  ];
+  for (const [ua, want] of CASES) {
+    const r = userAgentParse({ ua });
+    const label = ua.slice(0, 48);
+    if (want.browser) assert.equal(r.browser.name, want.browser, label);
+    if (want.version) assert.equal(r.browser.version, want.version, label);
+    if (want.major) assert.equal(r.browser.major, want.major, label);
+    if (want.platform) assert.equal(r.browser.platform, want.platform, label);
+    if (want.engine) assert.equal(r.engine.name, want.engine, label);
+    if (want.os) assert.equal(r.os.name, want.os, label);
+    if (want.osv) assert.equal(r.os.version, want.osv, label);
+    if (want.type) assert.equal(r.device.type, want.type, label);
+    if (want.vendor) assert.equal(r.device.vendor, want.vendor, label);
+    if (want.model) assert.equal(r.device.model, want.model, label);
+    if (want.cpu) assert.equal(r.cpu, want.cpu, label);
+    assert.equal(r.is_bot, false, label);
+  }
+
+  // ボットとHTTPクライアント
+  const gb = userAgentParse({ ua: 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' });
+  assert.equal(gb.bot.name, 'Googlebot');
+  assert.equal(gb.bot.category, 'search');
+  assert.equal(gb.is_bot, true);
+  assert.equal(gb.device.type, 'bot');
+  assert.ok(gb.notes.some((n) => n.code === 'bot_spoof' && n.message.includes('逆引き')));
+
+  const gpt = userAgentParse({ ua: 'Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko); compatible; GPTBot/1.1; +https://openai.com/gptbot' });
+  assert.equal(gpt.bot.name, 'GPTBot');
+  assert.equal(gpt.bot.category, 'ai');
+
+  const curl = userAgentParse({ ua: 'curl/8.7.1' });
+  assert.equal(curl.bot.name, 'curl');
+  assert.equal(curl.bot.category, 'http');
+  assert.equal(curl.bot.version, '8.7.1');
+
+  // アプリ内ブラウザ
+  const line = userAgentParse({ ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Line/15.2.0' });
+  assert.equal(line.in_app_browser, 'LINE');
+  assert.equal(line.os.name, 'iOS');
+  assert.ok(line.notes.some((n) => n.code === 'inapp'));
+
+  // アクセスログの行のまま渡せる（`User-Agent:`・引用符・末尾のカンマを剥がす）
+  const raw = userAgentParse({ ua: 'User-Agent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36",' });
+  assert.equal(raw.browser.name, 'Google Chrome');
+  assert.equal(raw.os.name, 'macOS');
+  assert.ok(raw.notes.some((n) => n.code === 'clean_header'));
+  assert.ok(raw.notes.some((n) => n.code === 'clean_quoted'));
+
+  // 「UAでは分からないこと」の指摘
+  const win = userAgentParse({ ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36' });
+  assert.ok(win.notes.some((n) => n.code === 'win_10_11'));
+  assert.ok(win.notes.some((n) => n.code === 'reduced_chrome'));
+  assert.ok(win.notes.some((n) => n.code === 'safari_token'));   // Chrome なのに Safari/ を含む
+  assert.ok(win.notes.some((n) => n.code === 'client_hints'));
+  assert.ok(win.notes.some((n) => n.code === 'spoofable'));
+  const andr = userAgentParse({ ua: 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Mobile Safari/537.36' });
+  assert.ok(andr.notes.some((n) => n.code === 'reduced_android'));
+  assert.ok(andr.notes.some((n) => n.code === 'model_k'));
+  const mac = userAgentParse({ ua: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15' });
+  assert.ok(mac.notes.some((n) => n.code === 'frozen_mac'));
+  assert.ok(mac.notes.some((n) => n.code === 'ipad_desktop'));   // iPadと見分けが付かない
+  const ie = userAgentParse({ ua: 'Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko' });
+  assert.ok(ie.notes.some((n) => n.code === 'ie_eol'));
+  assert.ok(ie.notes.some((n) => n.code === 'ie11_no_msie'));
+
+  // トークンの分解と解説
+  const toks = win.tokens.map((t) => t.token);
+  assert.ok(toks.includes('Mozilla/5.0'));
+  assert.ok(toks.includes('Windows NT 10.0'));
+  assert.ok(toks.includes('KHTML, like Gecko'));
+  assert.ok(toks.includes('Chrome/139.0.0.0'));
+  assert.equal(win.tokens.find((t) => t.token === 'Safari/537.36').meaning.includes('部分一致'), true);
+  // 括弧の中身は ; で分ける
+  assert.deepEqual(
+    tokenizeUA('Mozilla/5.0 (Linux; Android 13; Pixel 7)').filter((t) => t.kind === 'comment')[0].parts,
+    ['Linux', 'Android 13', 'Pixel 7'],
+  );
+
+  // 複数件の一括解析と内訳
+  const many = userAgentParse({
+    uas: [
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1',
+      'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+    ],
+  });
+  assert.equal(many.count, 4);
+  assert.equal(many.summary.browsers['Google Chrome'], 2);
+  assert.equal(many.summary.browsers.Safari, 1);
+  assert.equal(many.summary.os.Windows, 2);
+  assert.equal(many.summary.device_types.desktop, 2);
+  assert.equal(many.summary.device_types.mobile, 1);
+  assert.equal(many.summary.bots, 1);
+  assert.equal(many.results.length, 4);
+
+  // 判定できない入力でも落ちない
+  const junk = userAgentParse({ ua: 'my-internal-agent' });
+  assert.equal(junk.browser.name, null);
+  assert.ok(junk.notes.some((n) => n.code === 'unknown'));
+
+  // 不正な引数は UserAgentError
+  assert.throws(() => userAgentParse({}), UserAgentError);
+  assert.throws(() => userAgentParse({ ua: '   ' }), UserAgentError);
+  assert.throws(() => userAgentParse({ ua: 'x', uas: ['y'] }), UserAgentError);
+  assert.throws(() => userAgentParse({ uas: [1] }), UserAgentError);
+
+  // 個別の関数も直接使える（site側と同じ分解）
+  const ua = 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+  const b = detectBrowser(ua);
+  assert.equal(b.name, 'Google Chrome');
+  assert.equal(detectEngine(ua, b).name, 'Blink');
+  assert.equal(detectOS(ua).name, 'Android');
+  assert.equal(detectDevice(ua, detectOS(ua), detectBot(ua), tokenizeUA(ua)).model, 'Pixel 7');
+  assert.equal(detectInApp(ua), null);
+  assert.equal(parseUserAgent(ua).ua, ua);
 }
 
 
