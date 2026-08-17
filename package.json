@@ -1,7 +1,7 @@
 {
   "name": "@first-ch/tools-mcp",
-  "version": "0.18.0",
-  "description": "First CH Tools の計算ロジック（WCAGコントラスト比・文字数/Xウェイト・WebP変換・JSON-LD生成・llms.txt生成・文字コード/改行コード変換・Marp Markdown→スライド レンダリング・テストデータ生成・テキスト/コード差分・Cron式の解説・Base64/Data URI変換・URLパラメータの分解/再構築・HTML特殊文字のエスケープ/エンティティのデコード・JSON⇄YAMLの相互変換・px⇄rem/emの単位換算とCSSの一括変換・カラーコードの相互変換とアルファ透過の合成・MD5/SHA-1/SHA-256/SHA-384/SHA-512のハッシュ生成と照合・JWTのデコードと有効期限/署名の検証・User-Agent文字列の解析とデバイス判定）をMCPツールとして提供するサーバー",
+  "version": "0.19.0",
+  "description": "First CH Tools の計算ロジック（WCAGコントラスト比・文字数/Xウェイト・WebP変換・JSON-LD生成・llms.txt生成・文字コード/改行コード変換・Marp Markdown→スライド レンダリング・テストデータ生成・テキスト/コード差分・Cron式の解説・Base64/Data URI変換・URLパラメータの分解/再構築・HTML特殊文字のエスケープ/エンティティのデコード・JSON⇄YAMLの相互変換・px⇄rem/emの単位換算とCSSの一括変換・カラーコードの相互変換とアルファ透過の合成・MD5/SHA-1/SHA-256/SHA-384/SHA-512のハッシュ生成と照合・JWTのデコードと有効期限/署名の検証・User-Agent文字列の解析とデバイス判定・UUID v4/ULIDの一括生成）をMCPツールとして提供するサーバー",
   "type": "module",
   "bin": {
     "firstch-tools-mcp": "server.mjs"
@@ -93,7 +93,14 @@
     "browser-detection",
     "device-detection",
     "bot-detection",
-    "crawler"
+    "crawler",
+    "uuid",
+    "uuid-v4",
+    "ulid",
+    "guid",
+    "id-generator",
+    "unique-id",
+    "sortable-id"
   ],
   "author": "First CH LLC (https://first-ch.com)",
   "homepage": "https://tools.first-ch.com",
@@ -128,6 +135,7 @@
     "hash.mjs",
     "jwt.mjs",
     "user-agent.mjs",
+    "uuid.mjs",
     "vendor/",
     "README.md",
     "LICENSE"

@@ -34,6 +34,10 @@ import {
   jwtDecode, decodeJwt, normalizeInput, analyzeTiming, verifySignature,
   b64uToBytes, formatDuration, JwtError,
 } from './jwt.mjs';
+import {
+  uuidGenerate, generateIds, formatIds, uuidV4FromBytes, encodeUlidTime, encodeUlidRandom,
+  bumpUlidRandom, decodeUlid, UuidError,
+} from './uuid.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -1970,6 +1974,103 @@ assert.equal(over.x_postable, false);
   assert.equal(detectDevice(ua, detectOS(ua), detectBot(ua), tokenizeUA(ua)).model, 'Pixel 7');
   assert.equal(detectInApp(ua), null);
   assert.equal(parseUserAgent(ua).ua, ua);
+}
+
+
+// ==================== uuid_generate ====================
+{
+  // site/uuid/app.js と同じ生成結果になることを、決め打ちの乱数で確かめる
+  // （乱数を差し替えれば生成は決定的になる）
+  const fixed = (byte) => (n) => Uint8Array.from({ length: n }, () => byte);
+  const seq = (n) => Uint8Array.from({ length: n }, (_, i) => i & 0xff);
+
+  // UUID v4: 13文字目が 4、17文字目が 8/9/a/b（バリアント 10xx）
+  const u = generateIds({ type: 'uuid', count: 3, rand: seq });
+  assert.equal(u.ids.length, 3);
+  for (const id of u.ids) {
+    assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.equal(id.length, 36);
+  }
+  // 0x00..0x0f のバイト列から作ると、バージョンとバリアントのビットだけが立つ
+  assert.equal(uuidV4FromBytes(Uint8Array.from({ length: 16 }, (_, i) => i)), '00010203-0405-4607-8809-0a0b0c0d0e0f');
+  // 全ビット1でも版とバリアントは固定される
+  assert.equal(uuidV4FromBytes(Uint8Array.from({ length: 16 }, () => 0xff)), 'ffffffff-ffff-4fff-bfff-ffffffffffff');
+
+  // ULID: 26文字・先頭10文字が時刻・Crockford Base32（I/L/O/U を含まない）
+  const t = Date.UTC(2026, 7, 18, 12, 34, 56, 789);
+  const ul = generateIds({ type: 'ulid', count: 5, time: t, rand: fixed(0) });
+  assert.equal(ul.ids[0].length, 26);
+  for (const id of ul.ids) assert.doesNotMatch(id, /[ILOU]/);
+  assert.equal(decodeUlid(ul.ids[0]).time, t);
+  assert.equal(ul.ids[0].slice(0, 10), encodeUlidTime(t));
+  // 同一ミリ秒でも単調増加する＝辞書順が生成順と一致する
+  assert.deepEqual(ul.ids, [...ul.ids].sort());
+  assert.equal(ul.ids[0].slice(10), '0000000000000000');
+  assert.equal(ul.ids[4].slice(10), '0000000000000004');
+  // 桁上がり: 末尾が Z なら1つ上の桁へ繰り上がる
+  assert.equal(bumpUlidRandom('000000000000000Z'), '0000000000000010');
+  assert.equal(bumpUlidRandom('ZZZZZZZZZZZZZZZZ'), null);
+  assert.equal(encodeUlidRandom(Uint8Array.from({ length: 16 }, () => 0x1f)), 'ZZZZZZZZZZZZZZZZ');
+  // 時刻が進めば辞書順も進む
+  assert.ok(encodeUlidTime(t) < encodeUlidTime(t + 1));
+  assert.equal(encodeUlidTime(0), '0000000000');
+  assert.equal(decodeUlid('not-a-ulid'), null);
+
+  // 表記オプション（site側のチェックボックスと同じ挙動）
+  const ids = ['3f2a9c14-7b6e-4d05-9a83-1c5ef0b27d41'];
+  assert.equal(formatIds(ids, { type: 'uuid' }), '3f2a9c14-7b6e-4d05-9a83-1c5ef0b27d41');
+  assert.equal(formatIds(ids, { type: 'uuid', uppercase: true }), '3F2A9C14-7B6E-4D05-9A83-1C5EF0B27D41');
+  assert.equal(formatIds(ids, { type: 'uuid', hyphens: false }), '3f2a9c147b6e4d059a831c5ef0b27d41');
+  assert.equal(formatIds(ids, { type: 'uuid', braces: true }), '{3f2a9c14-7b6e-4d05-9a83-1c5ef0b27d41}');
+  assert.equal(formatIds(['a', 'b'], { type: 'uuid', format: 'csv' }), 'a,b');
+  assert.equal(formatIds(['a', 'b'], { type: 'uuid', format: 'quoted' }), '"a",\n"b"');
+  assert.deepEqual(JSON.parse(formatIds(['a', 'b'], { type: 'uuid', format: 'json' })), ['a', 'b']);
+  // ULIDの既定は大文字（明示すれば小文字にもできる）
+  assert.equal(formatIds(['01ARZ3NDEKTSV4RRFFQ69G5FAV'], { type: 'ulid' }), '01ARZ3NDEKTSV4RRFFQ69G5FAV');
+  assert.equal(formatIds(['01ARZ3NDEKTSV4RRFFQ69G5FAV'], { type: 'ulid', uppercase: false }), '01arz3ndektsv4rrffq69g5fav');
+  // ULIDにはハイフン/波括弧のオプションは効かない
+  assert.equal(formatIds(['01ARZ3NDEKTSV4RRFFQ69G5FAV'], { type: 'ulid', braces: true, hyphens: false }), '01ARZ3NDEKTSV4RRFFQ69G5FAV');
+
+  // ツール本体
+  const r = uuidGenerate({ count: 10 });
+  assert.equal(r.type, 'uuid');
+  assert.equal(r.count, 10);
+  assert.equal(r.ids.length, 10);
+  assert.equal(r.duplicates, 0);
+  assert.equal(r.length, 36);
+  assert.equal(r.version, 4);
+  assert.equal(r.text.split('\n').length, 10);
+  assert.equal(new Set(r.ids).size, 10);
+
+  const rj = uuidGenerate({ type: 'uuid', count: 3, format: 'json', hyphens: false, uppercase: true });
+  assert.deepEqual(JSON.parse(rj.text), rj.ids);
+  assert.equal(rj.length, 32);
+  for (const id of rj.ids) assert.match(id, /^[0-9A-F]{32}$/);
+
+  const rt = uuidGenerate({ type: 'ulid', count: 4, timestamp: '2026-08-18T12:34:56.789Z' });
+  assert.equal(rt.timestamp.unix_ms, Date.parse('2026-08-18T12:34:56.789Z'));
+  assert.equal(rt.timestamp.iso, '2026-08-18T12:34:56.789Z');
+  assert.equal(rt.monotonic, true);
+  assert.deepEqual(rt.ids, [...rt.ids].sort());
+  for (const id of rt.ids) assert.equal(decodeUlid(id).time, rt.timestamp.unix_ms);
+  // UNIX秒・ミリ秒でも同じ時刻になる
+  assert.equal(uuidGenerate({ type: 'ulid', timestamp: 1786790096 }).timestamp.unix_ms, 1786790096000);
+  assert.equal(uuidGenerate({ type: 'ulid', timestamp: 1786790096789 }).timestamp.unix_ms, 1786790096789);
+
+  // 100件でも重複せず、ULIDは順序が保たれる
+  const big = uuidGenerate({ type: 'ulid', count: 100 });
+  assert.equal(big.ids.length, 100);
+  assert.equal(big.duplicates, 0);
+  assert.deepEqual(big.ids, [...big.ids].sort());
+
+  // 不正な引数は UuidError
+  assert.throws(() => uuidGenerate({ type: 'uuid7' }), UuidError);
+  assert.throws(() => uuidGenerate({ count: 0 }), UuidError);
+  assert.throws(() => uuidGenerate({ count: 101 }), UuidError);
+  assert.throws(() => uuidGenerate({ count: 1.5 }), UuidError);
+  assert.throws(() => uuidGenerate({ format: 'xml' }), UuidError);
+  assert.throws(() => uuidGenerate({ type: 'uuid', timestamp: '2026-08-18' }), UuidError);
+  assert.throws(() => uuidGenerate({ type: 'ulid', timestamp: 'yesterday' }), UuidError);
 }
 
 

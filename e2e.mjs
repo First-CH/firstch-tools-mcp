@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 20 registered tools, and `tools/call` actually executes handlers
+// returns all 21 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -76,6 +76,7 @@ try {
     'testdata_generate',
     'url_params',
     'user_agent_parse',
+    'uuid_generate',
     'webp_convert',
     'yaml_to_json',
   ];
@@ -369,6 +370,27 @@ try {
 
   const uaErr = await request('tools/call', { name: 'user_agent_parse', arguments: {} }, 43);
   assert.ok(uaErr.result?.isError, `user_agent_parse should require ua or uas: ${JSON.stringify(uaErr)}`);
+
+  // uuid_generate: UUID v4 を10件（重複なし・書式が RFC 9562 どおり）
+  const uuidRes = await callTool('uuid_generate', { type: 'uuid', count: 10 }, 44);
+  assert.equal(uuidRes.count, 10, `uuid_generate count mismatch: ${JSON.stringify(uuidRes.count)}`);
+  assert.equal(uuidRes.ids?.length, 10, `uuid_generate ids mismatch: ${JSON.stringify(uuidRes.ids)}`);
+  assert.equal(uuidRes.duplicates, 0, `uuid_generate produced duplicates: ${JSON.stringify(uuidRes.ids)}`);
+  for (const id of uuidRes.ids) {
+    assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, `uuid_generate bad id: ${id}`);
+  }
+
+  // ULID は時刻を固定でき、同一ミリ秒内でも辞書順＝生成順になる
+  const ulidRes = await callTool('uuid_generate', { type: 'ulid', count: 5, timestamp: '2026-08-18T12:34:56.789Z', format: 'json' }, 45);
+  assert.equal(ulidRes.timestamp?.iso, '2026-08-18T12:34:56.789Z', `uuid_generate ulid timestamp mismatch: ${JSON.stringify(ulidRes.timestamp)}`);
+  assert.deepEqual(ulidRes.ids, [...ulidRes.ids].sort(), `ulid batch is not sorted: ${JSON.stringify(ulidRes.ids)}`);
+  assert.deepEqual(JSON.parse(ulidRes.text), ulidRes.ids, `uuid_generate json format mismatch: ${ulidRes.text}`);
+  for (const id of ulidRes.ids) {
+    assert.match(id, /^[0-9A-HJKMNP-TV-Z]{26}$/, `uuid_generate bad ulid: ${id}`);
+  }
+
+  const uuidErr = await request('tools/call', { name: 'uuid_generate', arguments: { count: 1000 } }, 46);
+  assert.ok(uuidErr.result?.isError, `uuid_generate should reject count > 100: ${JSON.stringify(uuidErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();
