@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 21 registered tools, and `tools/call` actually executes handlers
+// returns all 22 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -58,6 +58,7 @@ try {
   const listRes = await request('tools/list', {}, 2);
   const names = (listRes.result?.tools || []).map((t) => t.name).sort();
   const expected = [
+    'aspect_ratio_calc',
     'base64_encode',
     'color_convert',
     'contrast_check',
@@ -391,6 +392,21 @@ try {
 
   const uuidErr = await request('tools/call', { name: 'uuid_generate', arguments: { count: 1000 } }, 46);
   assert.ok(uuidErr.result?.isError, `uuid_generate should reject count > 100: ${JSON.stringify(uuidErr)}`);
+
+  // aspect_ratio_calc: 16:9 で幅1280 → 高さ720・padding-top 56.25%
+  const arRes = await callTool('aspect_ratio_calc', { ratio: '16:9', width: 1280, snippet: true }, 47);
+  assert.equal(arRes.height, 720, `aspect_ratio_calc height mismatch: ${JSON.stringify(arRes.height)}`);
+  assert.equal(arRes.ratio?.text, '16:9', `aspect_ratio_calc ratio mismatch: ${JSON.stringify(arRes.ratio)}`);
+  assert.equal(arRes.padding_top, '56.25%', `aspect_ratio_calc padding_top mismatch: ${arRes.padding_top}`);
+  assert.ok(arRes.snippet?.css.includes('aspect-ratio: 16 / 9;'), `aspect_ratio_calc snippet mismatch: ${arRes.snippet?.css}`);
+
+  // 寸法だけを渡すと約分した比率と、枠へはめ込んだときの切り取り量を返す
+  const arMeasure = await callTool('aspect_ratio_calc', { width: 1920, height: 1080, box: '1280x400', fit: 'cover' }, 48);
+  assert.equal(arMeasure.ratio?.text, '16:9', `aspect_ratio_calc measure mismatch: ${JSON.stringify(arMeasure.ratio)}`);
+  assert.equal(arMeasure.fit?.crop_y, 160, `aspect_ratio_calc fit mismatch: ${JSON.stringify(arMeasure.fit)}`);
+
+  const arErr = await request('tools/call', { name: 'aspect_ratio_calc', arguments: { width: 1920 } }, 49);
+  assert.ok(arErr.result?.isError, `aspect_ratio_calc should require ratio or both sides: ${JSON.stringify(arErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

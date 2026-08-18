@@ -38,6 +38,10 @@ import {
   uuidGenerate, generateIds, formatIds, uuidV4FromBytes, encodeUlidTime, encodeUlidRandom,
   bumpUlidRandom, decodeUlid, UuidError,
 } from './uuid.mjs';
+import {
+  aspectRatioCalc, arGcd, arFormat, arSimplify, arApprox, arNearestPreset, arParseRatio,
+  arRound, arSize, arRatioOf, arFit, arTable, arSnippet, AspectRatioError,
+} from './aspect-ratio.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -2071,6 +2075,196 @@ assert.equal(over.x_postable, false);
   assert.throws(() => uuidGenerate({ format: 'xml' }), UuidError);
   assert.throws(() => uuidGenerate({ type: 'uuid', timestamp: '2026-08-18' }), UuidError);
   assert.throws(() => uuidGenerate({ type: 'ulid', timestamp: 'yesterday' }), UuidError);
+}
+
+
+
+// ==================== aspect_ratio_calc ====================
+{
+  // 約分（site/aspect-ratio/app.js と同じ結果になること）
+  assert.equal(arGcd(1920, 1080), 120);
+  assert.equal(arGcd(0, 5), 5);
+  assert.equal(arGcd(0, 0), 1);
+  assert.deepEqual(arSimplify(1920, 1080), { w: 16, h: 9 });
+  assert.deepEqual(arSimplify(3840, 2160), { w: 16, h: 9 });
+  assert.deepEqual(arSimplify(1200, 630), { w: 40, h: 21 });
+  assert.deepEqual(arSimplify(2560, 1080), { w: 64, h: 27 });
+  assert.deepEqual(arSimplify(3440, 1440), { w: 43, h: 18 });
+  // 小数は入力した桁数ぶん10倍してから約分する
+  assert.deepEqual(arSimplify(1.85, 1), { w: 37, h: 20 });
+  assert.deepEqual(arSimplify(2.39, 1), { w: 239, h: 100 });
+  assert.deepEqual(arSimplify(1.5, 1), { w: 3, h: 2 });
+
+  // 比率の読み取り（区切りは : / x × by、単独の数値は N:1）
+  assert.deepEqual(arParseRatio('16:9'), { w: 16, h: 9 });
+  assert.deepEqual(arParseRatio('16/9'), { w: 16, h: 9 });
+  assert.deepEqual(arParseRatio('16x9'), { w: 16, h: 9 });
+  assert.deepEqual(arParseRatio('1920 × 1080'), { w: 1920, h: 1080 });
+  assert.deepEqual(arParseRatio('1.85'), { w: 1.85, h: 1 });
+  assert.equal(arParseRatio('16:'), null);
+  assert.equal(arParseRatio('0:9'), null);
+  assert.equal(arParseRatio('-16:9'), null);
+  assert.equal(arParseRatio(''), null);
+
+  // 連分数展開: 1.7778 は分母50以下では 16:9 が最良
+  const ap = arApprox(1.7778, 50);
+  assert.equal(ap.w, 16);
+  assert.equal(ap.h, 9);
+  assert.ok(ap.error < 0.01);
+  assert.deepEqual([arApprox(0.5625, 50).w, arApprox(0.5625, 50).h], [9, 16]);
+  assert.equal(arApprox(0, 50), null);
+
+  // いちばん近い定番比率
+  assert.equal(arNearestPreset(16 / 9).key, 'HD');
+  assert.equal(arNearestPreset(1200 / 630).key, 'OGP');
+  assert.equal(arNearestPreset(2560 / 1080).key, 'ULTRA_REAL');
+  assert.equal(arNearestPreset(1080 / 1350).key, 'PORTRAIT_45');
+
+  // 丸め方
+  assert.equal(arRound(768.375, 'round'), 768);
+  assert.equal(arRound(768.375, 'floor'), 768);
+  assert.equal(arRound(768.375, 'ceil'), 769);
+  assert.equal(arRound(768.375, 'even'), 768);
+  assert.equal(arRound(769, 'even'), 770);
+  assert.equal(arRound(1, 'even'), 2);
+  assert.equal(arRound(720.0000001, 'none'), 720);
+
+  // 比率＋幅 → 高さ
+  const s1 = arSize({ ratioW: 16, ratioH: 9, width: 1280 });
+  assert.equal(s1.height, 720);
+  assert.equal(s1.exact, true);
+  assert.equal(s1.css, 'aspect-ratio: 16 / 9;');
+  assert.equal(Math.round(s1.paddingTop * 100) / 100, 56.25);
+  // 比率＋高さ → 幅
+  assert.equal(arSize({ ratioW: 16, ratioH: 9, height: 1080 }).width, 1920);
+  // 割り切れない幅
+  const s2 = arSize({ ratioW: 16, ratioH: 9, width: 1366, round: 'round' });
+  assert.equal(s2.exactHeight, 768.375);
+  assert.equal(s2.height, 768);
+  assert.equal(s2.exact, false);
+  assert.equal(s2.rounded, true);
+  assert.ok(Math.abs(s2.errorPercent) < 0.1);
+  assert.equal(arSize({ ratioW: 16, ratioH: 9 }), null);
+  assert.equal(arSize({ ratioW: 0, ratioH: 9, width: 100 }), null);
+
+  // 寸法 → 比率
+  const m = arRatioOf(1920, 1080);
+  assert.deepEqual(m.ratio, { w: 16, h: 9 });
+  assert.equal(m.known, 'FHD');
+  assert.equal(m.orientation, 'landscape');
+  assert.equal(Math.round(m.megapixels * 100) / 100, 2.07);
+  assert.equal(arRatioOf(1080, 1920).orientation, 'portrait');
+  assert.equal(arRatioOf(500, 500).orientation, 'square');
+  assert.equal(arRatioOf(0, 100), null);
+
+  // はめ込み: 1920×1080 を 1280×400 へ
+  const cover = arFit({ srcW: 1920, srcH: 1080, boxW: 1280, boxH: 400, mode: 'cover' });
+  assert.equal(cover.width, 1280);
+  assert.equal(cover.height, 720);
+  assert.equal(cover.cropY, 160);
+  assert.equal(cover.cropX, 0);
+  assert.equal(Math.round(cover.visiblePercent * 100) / 100, 55.56);
+  const contain = arFit({ srcW: 1920, srcH: 1080, boxW: 1280, boxH: 400, mode: 'contain' });
+  assert.equal(Math.round(contain.width), 711);
+  assert.equal(contain.height, 400);
+  assert.equal(Math.round(contain.barX * 100) / 100, 284.44);
+  assert.equal(contain.barY, 0);
+  // 比率が同じなら contain と cover は一致する
+  const same = arFit({ srcW: 1920, srcH: 1080, boxW: 640, boxH: 360, mode: 'cover' });
+  assert.equal(same.width, 640);
+  assert.equal(same.height, 360);
+  assert.equal(same.cropX, 0);
+  assert.equal(same.cropY, 0);
+
+  // 早見表
+  const rows = arTable({ ratioW: 16, ratioH: 9, widths: [320, 768, 1280, 1920] });
+  assert.deepEqual(rows.map((r) => r.height), [180, 432, 720, 1080]);
+  assert.equal(rows[0].exact, true);
+  assert.equal(arTable({ ratioW: 16, ratioH: 9 }).length, 8);
+  assert.equal(arTable({ ratioW: 0, ratioH: 9 }).length, 0);
+
+  // スニペット
+  const sn = arSnippet({ ratioW: 16, ratioH: 9, selector: '.hero', target: 'img', fit: 'cover', width: 1280 });
+  assert.ok(sn.css.includes('.hero {'));
+  assert.ok(sn.css.includes('aspect-ratio: 16 / 9;'));
+  assert.ok(sn.css.includes('object-fit: cover;'));
+  assert.ok(sn.html.includes('width="1280" height="720"'));
+  assert.ok(!sn.css.includes('@supports'));
+  const snf = arSnippet({ ratioW: 16, ratioH: 9, fallback: true });
+  assert.ok(snf.css.includes('@supports not (aspect-ratio: 1 / 1)'));
+  assert.ok(snf.css.includes('padding-top: 56.25%;'));
+  const sni = arSnippet({ ratioW: 16, ratioH: 9, target: 'iframe' });
+  assert.ok(sni.css.includes('border: 0;'));
+  assert.ok(!sni.css.includes('object-fit'));
+  assert.ok(sni.html.includes('<iframe'));
+
+  // ツール本体: 比率＋幅
+  const r1 = aspectRatioCalc({ ratio: '16:9', width: 1280 });
+  assert.equal(r1.mode, 'size');
+  assert.equal(r1.height, 720);
+  assert.equal(r1.ratio.text, '16:9');
+  assert.equal(r1.padding_top, '56.25%');
+  assert.equal(r1.css, 'aspect-ratio: 16 / 9;');
+  assert.ok(r1.notes.some((n) => n.code === 'KNOWN_SIZE'));
+  assert.ok(r1.notes.some((n) => n.code === 'EXACT'));
+
+  // 奇数を含む結果には動画向けの指摘が付く
+  const r2 = aspectRatioCalc({ ratio: '16:9', width: 1366, round: 'round' });
+  assert.equal(r2.height, 768);
+  assert.ok(r2.notes.some((n) => n.code === 'NOT_INTEGER'));
+  assert.ok(r2.notes.some((n) => n.code === 'ROUNDED'));
+  const r3 = aspectRatioCalc({ ratio: '16:9', width: 1000, round: 'round' });
+  assert.equal(r3.height, 563);
+  assert.ok(r3.notes.some((n) => n.code === 'ODD_DIMENSION'));
+  assert.equal(aspectRatioCalc({ ratio: '16:9', width: 1000, round: 'even' }).height, 562);
+
+  // 寸法だけ → 比率
+  const r4 = aspectRatioCalc({ width: 1920, height: 1080 });
+  assert.equal(r4.mode, 'measure');
+  assert.equal(r4.ratio.text, '16:9');
+  assert.equal(r4.known, 'FHD（1080p）');
+  assert.equal(r4.nearest.error_percent, 0);
+  assert.ok(r4.notes.some((n) => n.code === 'NEAREST_EXACT'));
+
+  // 21:9 は実機と違うという指摘が付く（約分すると 7:3 なので判定は小数で行う）
+  const r21 = aspectRatioCalc({ ratio: '21:9', width: 2560 });
+  assert.equal(r21.ratio.text, '7:3');
+  assert.ok(r21.notes.some((n) => n.code === 'ULTRAWIDE'));
+  assert.equal(aspectRatioCalc({ width: 2560, height: 1080 }).ratio.text, '64:27');
+  assert.ok(aspectRatioCalc({ width: 2560, height: 1080 }).notes.every((n) => n.code !== 'ULTRAWIDE'));
+
+  // round='none' は丸めていない（1e-6 の桁揃えを「丸めた」と言わない）
+  assert.equal(aspectRatioCalc({ ratio: '21:9', width: 2560 }).rounded, false);
+  assert.equal(aspectRatioCalc({ ratio: '16:9', width: 1280 }).rounded, false);
+  assert.ok(aspectRatioCalc({ ratio: '21:9', width: 2560 }).notes.every((n) => n.code !== 'ROUNDED'));
+  assert.equal(aspectRatioCalc({ ratio: '16:9', width: 1366, round: 'round' }).rounded, true);
+
+  // 比率だけ
+  const r5 = aspectRatioCalc({ ratio: '1.85' });
+  assert.equal(r5.mode, 'ratio');
+  assert.equal(r5.ratio.text, '37:20');
+  assert.equal(r5.css, 'aspect-ratio: 37 / 20;');
+
+  // はめ込み・早見表・スニペット
+  const r6 = aspectRatioCalc({ width: 1920, height: 1080, box: '1280x400', fit: 'cover' });
+  assert.equal(r6.fit.mode, 'cover');
+  assert.equal(r6.fit.crop_y, 160);
+  assert.equal(r6.fit.same_ratio, false);
+  const r7 = aspectRatioCalc({ ratio: '16:9', width: 1280, widths: [320, 768], snippet: true });
+  assert.deepEqual(r7.table.map((t) => t.height), [180, 432]);
+  assert.ok(r7.snippet.css.includes('aspect-ratio: 16 / 9;'));
+  assert.ok(r7.snippet.html.includes('width="1280" height="720"'));
+  assert.equal(aspectRatioCalc({ ratio: '16:9', width: 1280, table: true }).table.length, 8);
+
+  // 不正な引数は AspectRatioError
+  assert.throws(() => aspectRatioCalc({}), AspectRatioError);
+  assert.throws(() => aspectRatioCalc({ width: 1920 }), AspectRatioError);
+  assert.throws(() => aspectRatioCalc({ ratio: 'あ:い', width: 100 }), AspectRatioError);
+  assert.throws(() => aspectRatioCalc({ ratio: '16:9', width: 0 }), AspectRatioError);
+  assert.throws(() => aspectRatioCalc({ ratio: '16:9', width: -5 }), AspectRatioError);
+  assert.throws(() => aspectRatioCalc({ ratio: '16:9', width: 100, round: 'nearest' }), AspectRatioError);
+  assert.throws(() => aspectRatioCalc({ ratio: '16:9', width: 100, box: 'wide' }), AspectRatioError);
+  assert.throws(() => aspectRatioCalc({ ratio: '16:9', width: 100, box: '1280x400', fit: 'fill' }), AspectRatioError);
 }
 
 

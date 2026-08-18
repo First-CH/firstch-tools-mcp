@@ -22,6 +22,7 @@ import { hashGenerate } from './hash.mjs';
 import { jwtDecode } from './jwt.mjs';
 import { userAgentParse } from './user-agent.mjs';
 import { uuidGenerate, MAX_COUNT as UUID_MAX_COUNT } from './uuid.mjs';
+import { aspectRatioCalc } from './aspect-ratio.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -846,6 +847,67 @@ server.registerTool(
   async (opts) => {
     await logUsage('uuid_generate');
     return asText(uuidGenerate(opts));
+  },
+);
+
+server.registerTool(
+  'aspect_ratio_calc',
+  {
+    title: 'アスペクト比の計算・レスポンシブサイズ算出',
+    description:
+      'アスペクト比と寸法を相互に計算する（tools.first-ch.com/aspect-ratio/ と同一ロジック）。' +
+      "ratio（'16:9' / '16/9' / '1.85'）と width か height の片方を渡すと、もう一方の寸法を返す。" +
+      'width と height を渡して ratio を省くと、最大公約数で約分した比率・小数・向き・画素数と、' +
+      'いちばん近い定番比率（16:9・4:3・3:2・1:1・4:5・9:16・21:9・1.85:1・2.39:1・1.91:1(OGP)・黄金比など）' +
+      'からのずれを返す。1920×1080 のように名前のある寸法はその名前も返す。' +
+      'round で 四捨五入（round）・偶数（even）・切り捨て（floor）・切り上げ（ceil）を選べ、' +
+      '丸めた場合は丸め後の実際の比率と指定した比率からのずれ（%）を返す。' +
+      'H.264 / H.265 は色情報を縦横半分で持つ（YUV 4:2:0）ため幅・高さとも偶数が必要で、動画向けには round="even" を使う。' +
+      'box を渡すと、その枠へ contain / cover ではめ込んだときの描画サイズ・拡大率・余白（レターボックス / ピラーボックス）・' +
+      '切り取られる量・見える割合を返す。' +
+      'widths か table=true でブレークポイントごとの高さの早見表を、snippet=true で aspect-ratio のCSSと' +
+      '（CLSを防ぐ width / height 属性入りの）HTMLを返す。' +
+      '完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      ratio: z
+        .union([z.string(), z.number()])
+        .optional()
+        .describe("アスペクト比（'16:9' / '16/9' / '16x9' / '1.85' / 1.85。省略時は width と height の両方が必要）"),
+      width: z.number().optional().describe('幅 px（ratio と併せると高さを求める。ratio を省くと height と対で比率を求める）'),
+      height: z.number().optional().describe('高さ px（ratio と併せると幅を求める）'),
+      round: z
+        .enum(['none', 'round', 'floor', 'ceil', 'even'])
+        .optional()
+        .describe("整数への丸め方（既定 'none'=計算どおり。'even' は動画向けに偶数へ寄せる）"),
+      widths: z
+        .array(z.number())
+        .optional()
+        .describe('早見表に並べる幅の一覧（既定 [320,375,414,768,1024,1280,1440,1920]。渡すと表を返す）'),
+      table: z.boolean().optional().describe('既定の幅で早見表を返すか（widths を渡した場合は自動で true）'),
+      box: z
+        .union([z.string(), z.object({ width: z.number(), height: z.number() })])
+        .optional()
+        .describe("はめ込む枠の寸法（'1280x400' または {width,height}）"),
+      fit: z.enum(['cover', 'contain']).optional().describe("box へのはめ方（既定 'cover'=枠を埋めてはみ出しを切る）"),
+      snippet: z.boolean().optional().describe('CSS と HTML のスニペットを返すか（既定 false）'),
+      selector: z.string().optional().describe("スニペットのセレクタ（既定 '.media'）"),
+      target: z
+        .enum(['img', 'video', 'iframe', 'background'])
+        .optional()
+        .describe("スニペットの中に入れる要素（既定 'img'）"),
+      objectFit: z
+        .enum(['cover', 'contain', 'fill', 'none'])
+        .optional()
+        .describe("スニペットの object-fit（既定 'cover'。target=iframe では使わない）"),
+      fallback: z
+        .boolean()
+        .optional()
+        .describe('aspect-ratio 非対応ブラウザ向けの padding-top フォールバックを付けるか（既定 false）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('aspect_ratio_calc');
+    return asText(aspectRatioCalc(opts));
   },
 );
 
