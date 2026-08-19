@@ -42,6 +42,11 @@ import {
   aspectRatioCalc, arGcd, arFormat, arSimplify, arApprox, arNearestPreset, arParseRatio,
   arRound, arSize, arRatioOf, arFit, arTable, arSnippet, AspectRatioError,
 } from './aspect-ratio.mjs';
+import {
+  markdownTable, mtWidth, mtDetect, mtParse, mtParseDelimited, mtParseMarkdown, mtNormalize,
+  mtTranspose, mtAutoAligns, mtBuildMarkdown, mtBuildDelimited, mtBuildHtml, mtBuildJson,
+  mtIsNumeric, mtQuote, MarkdownTableError,
+} from './markdown-table.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -2265,6 +2270,189 @@ assert.equal(over.x_postable, false);
   assert.throws(() => aspectRatioCalc({ ratio: '16:9', width: 100, round: 'nearest' }), AspectRatioError);
   assert.throws(() => aspectRatioCalc({ ratio: '16:9', width: 100, box: 'wide' }), AspectRatioError);
   assert.throws(() => aspectRatioCalc({ ratio: '16:9', width: 100, box: '1280x400', fit: 'fill' }), AspectRatioError);
+}
+
+// ==================== markdown_table ====================
+{
+  // 表示幅: 全角は2桁、結合文字と異体字セレクタは0桁
+  assert.equal(mtWidth('abc', true), 3);
+  assert.equal(mtWidth('商品名', true), 6);
+  assert.equal(mtWidth('商品名', false), 3);
+  assert.equal(mtWidth('カ\u3099', true), 4);       // 濁点は結合文字扱いではないので2桁の文字が2つ
+  assert.equal(mtWidth('e\u0301', true), 1);        // 結合アクセントは0桁
+  assert.equal(mtWidth('👍', true), 2);
+  assert.equal(mtWidth('👍', false), 1);
+
+  // 区切り文字の自動判定: 桁区切りのカンマに引っ張られない
+  assert.equal(mtDetect('a\tb\n1,200\t3').format, 'tsv');
+  assert.equal(mtDetect('a,b,c\n1,2,3').format, 'csv');
+  assert.equal(mtDetect('a;b;c\n1;2;3').format, 'ssv');
+  assert.equal(mtDetect('| a | b |\n| --- | --- |\n| 1 | 2 |').format, 'markdown');
+  assert.equal(mtDetect('ただの文章です。').confident, false);
+  assert.equal(mtDetect('').columns, 0);
+
+  // RFC 4180: 引用符の中のカンマ・改行・"" 
+  const csv = mtParseDelimited('a,b\n"x,y","1""2"\n"複数\n行",z', ',');
+  assert.deepEqual(csv.rows, [['a', 'b'], ['x,y', '1"2'], ['複数\n行', 'z']]);
+  assert.equal(csv.quoted, true);
+  assert.equal(csv.unterminated, false);
+  assert.equal(mtParseDelimited('a,"b', ',').unterminated, true);
+  // 末尾の改行で空行を増やさない
+  assert.equal(mtParseDelimited('a,b\n1,2\n', ',').rows.length, 2);
+
+  // Markdownの読み取り（外側の | の有無・\| のエスケープ・<br>・配置）
+  const md = mtParseMarkdown('見出しの文\n\n| a | b\\|c |\n| :-- | --: |\n| 1 | x<br>y |\n');
+  assert.deepEqual(md.rows, [['a', 'b|c'], ['1', 'x\ny']]);
+  assert.deepEqual(md.aligns, ['left', 'right']);
+  assert.equal(md.separatorAt, 1);
+  assert.deepEqual(mtParseMarkdown('a | b\n--- | ---\n1 | 2').rows, [['a', 'b'], ['1', '2']]);
+  // 区切り行が無ければ配置は取れない（1行目を見出しとして扱う側の判断に任せる）
+  assert.equal(mtParseMarkdown('| a | b |\n| 1 | 2 |').separatorAt, -1);
+
+  // 長方形へ整える（空行を捨て、足りない行に空セルを補う）
+  const norm = mtNormalize([[' a ', 'b', 'c'], [''], ['1', '2']], {});
+  assert.deepEqual(norm.rows, [['a', 'b', 'c'], ['1', '2', '']]);
+  assert.equal(norm.ragged, 1);
+  assert.equal(norm.columns, 3);
+  assert.deepEqual(mtTranspose([['a', 'b'], ['1', '2']]), [['a', '1'], ['b', '2']]);
+
+  // 数値列の判定（桁区切り・通貨・%・単位は数値、1つでも文字が混ざれば対象外）
+  assert.equal(mtIsNumeric('1,200'), true);
+  assert.equal(mtIsNumeric('-3.5%'), true);
+  assert.equal(mtIsNumeric('¥8,800'), true);
+  assert.equal(mtIsNumeric('16px'), true);
+  assert.equal(mtIsNumeric('2026-08-20'), false);
+  assert.equal(mtIsNumeric('n/a'), false);
+  assert.deepEqual(mtAutoAligns([['a', '1'], ['b', '2']], ['none', 'none'], true), ['none', 'right']);
+  assert.deepEqual(mtAutoAligns([['a', '1']], ['none', 'left'], true), ['none', 'left']);
+  assert.deepEqual(mtAutoAligns([['a', '1']], ['none', 'none'], false), ['none', 'none']);
+  // 空セルだけの列は数値列ではない
+  assert.deepEqual(mtAutoAligns([['a', ''], ['b', '']], ['none', 'none'], true), ['none', 'none']);
+
+  // 組み立て
+  assert.equal(
+    mtBuildMarkdown(['商品名', '単価'], [['和紙ノート', '1,200']], ['none', 'right'], { pad: true, eastAsian: true }),
+    '| 商品名     |  単価 |\n| ---------- | ----: |\n| 和紙ノート | 1,200 |\n',
+  );
+  assert.equal(
+    mtBuildMarkdown(['a', 'b'], [['1', '2']], ['left', 'center'], { pad: false }),
+    '| a | b |\n| :--- | :---: |\n| 1 | 2 |\n',
+  );
+  // セル内の | と改行は書き出す前に安全な形へ
+  assert.equal(
+    mtBuildMarkdown(['a'], [['x|y'], ['1\n2']], ['none'], { pad: false }),
+    '| a |\n| --- |\n| x\\|y |\n| 1<br>2 |\n',
+  );
+  assert.equal(
+    mtBuildMarkdown(['a'], [['1\n2']], ['none'], { pad: false, multiline: 'space' }).split('\n')[2],
+    '| 1 2 |',
+  );
+  assert.equal(mtQuote('a,b', ','), '"a,b"');
+  assert.equal(mtQuote(' a', ','), '" a"');
+  assert.equal(mtQuote('a"b', ','), '"a""b"');
+  assert.equal(mtQuote('a,b', '\t'), 'a,b');
+  assert.equal(mtBuildDelimited([['a', 'b'], ['1', '2']], ',', 'lf'), 'a,b\n1,2\n');
+  assert.equal(mtBuildDelimited([['a']], ',', 'crlf'), 'a\r\n');
+  assert.equal(
+    mtBuildHtml(['a'], [['<b>']], ['right'], {}),
+    '<table>\n  <thead>\n    <tr>\n      <th style="text-align:right">a</th>\n    </tr>\n  </thead>\n'
+    + '  <tbody>\n    <tr>\n      <td style="text-align:right">&lt;b&gt;</td>\n    </tr>\n  </tbody>\n</table>\n',
+  );
+  assert.equal(mtBuildJson(['a', 'a'], [['1', '2']], true), '[\n  {\n    "a": "1",\n    "a_2": "2"\n  }\n]\n');
+  assert.equal(mtBuildJson([], [['1', '2']], false), '[\n  [\n    "1",\n    "2"\n  ]\n]\n');
+
+  // 入口（site側の画面と同じ結果になること）
+  const r1 = await markdownTable({ text: '商品名\t単価\t数量\n和紙ノート\t1,200\t3\n万年筆\t8,800\t1\n' });
+  assert.equal(r1.text,
+    '| 商品名     |  単価 | 数量 |\n'
+    + '| ---------- | ----: | ---: |\n'
+    + '| 和紙ノート | 1,200 |    3 |\n'
+    + '| 万年筆     | 8,800 |    1 |\n');
+  assert.equal(r1.source.format, 'tsv');
+  assert.equal(r1.rows, 3);
+  assert.equal(r1.columns, 3);
+  assert.equal(r1.body_rows, 2);
+  assert.deepEqual(r1.aligns, ['none', 'right', 'right']);
+  assert.ok(r1.notes.some((n) => n.code === 'NUMERIC'));
+  assert.ok(r1.notes.some((n) => n.code === 'WIDE'));
+
+  // 全角2桁をやめると桁が揃わない
+  const r2 = await markdownTable({ text: '商品名\t単価\n和紙ノート\t1,200\n', eastAsian: false });
+  assert.equal(r2.text.split('\n')[0], '| 商品名   |    単価 |');
+  assert.ok(r2.notes.some((n) => n.code === 'WIDE_OFF'));
+
+  // 出力形式の切り替え
+  const src = 'a\tb\n1\t2\n';
+  assert.equal((await markdownTable({ text: src, to: 'csv' })).text, 'a,b\n1,2\n');
+  assert.equal((await markdownTable({ text: src, to: 'tsv' })).text, 'a\tb\n1\t2\n');
+  assert.equal((await markdownTable({ text: src, to: 'ssv' })).text, 'a;b\n1;2\n');
+  assert.equal((await markdownTable({ text: src, to: 'json' })).text, '[\n  {\n    "a": "1",\n    "b": "2"\n  }\n]\n');
+  assert.ok((await markdownTable({ text: src, to: 'html' })).text.startsWith('<table>'));
+  assert.equal((await markdownTable({ text: src, to: 'csv', eol: 'crlf' })).text, 'a,b\r\n1,2\r\n');
+  assert.equal((await markdownTable({ text: src, eol: 'crlf' })).text.includes('\r\n'), true);
+
+  // Markdown → CSV（配置を読み、<br> を改行へ戻し、改行入りのセルは引用符で囲む）
+  const back = await markdownTable({ text: '| a | b |\n| :-- | --: |\n| 1 | x<br>y |\n', to: 'csv' });
+  assert.equal(back.text, 'a,b\n1,"x\ny"\n');
+  assert.equal(back.source.format, 'markdown');
+  const keep = await markdownTable({ text: '| a | b |\n| :-- | --: |\n| 1 | 2 |\n' });
+  assert.deepEqual(keep.aligns, ['left', 'right']);
+
+  // 1行目の扱い
+  assert.equal((await markdownTable({ text: '1,2\n3,4\n', header: 'auto' })).text.split('\n')[0], '| col1 | col2 |');
+  assert.equal((await markdownTable({ text: '1,2\n3,4\n', header: 'none' })).text.split('\n')[0], '|     |     |');
+  assert.equal((await markdownTable({ text: '1,2\n3,4\n', header: 'none', to: 'csv' })).text, '1,2\n3,4\n');
+  assert.equal((await markdownTable({ text: '1,2\n3,4\n', header: 'none', to: 'json' })).text.startsWith('[\n  [\n'), true);
+
+  // 配置の指定（aligns は align より優先）
+  const al = await markdownTable({ text: 'a,b\nx,y\n', align: 'center' });
+  assert.equal(al.text.split('\n')[1], '| :---: | :---: |');
+  const al2 = await markdownTable({ text: 'a,b\nx,y\n', align: 'center', aligns: ['left'] });
+  assert.deepEqual(al2.aligns, ['left', 'center']);
+
+  // 列数の不揃い・転置・空行
+  const rag = await markdownTable({ text: 'a,b,c\n\n1,2\n' });
+  assert.equal(rag.columns, 3);
+  assert.ok(rag.notes.some((n) => n.code === 'RAGGED'));
+  const tr = await markdownTable({ text: 'a,b\n1,2\n', transpose: true });
+  assert.equal(tr.text.split('\n')[0], '| a   |   1 |');
+  // 見出しの重複・空欄・本文なし
+  const dup = await markdownTable({ text: 'a,a,\n1,2,3\n' });
+  assert.ok(dup.notes.some((n) => n.code === 'DUP_HEADER'));
+  assert.ok(dup.notes.some((n) => n.code === 'EMPTY_HEADER'));
+  assert.ok((await markdownTable({ text: 'a,b\n' })).notes.some((n) => n.code === 'ONE_ROW'));
+  // 区切りが見つからない入力
+  assert.ok((await markdownTable({ text: 'ただの1行' })).notes.some((n) => n.code === 'NO_DELIMITER'));
+  // BOM付きでも読める
+  assert.equal((await markdownTable({ text: '\ufeffa,b\n1,2\n' })).columns, 2);
+
+  // ファイルの読み書き
+  {
+    const { mkdtemp, writeFile: wf, readFile: rf, rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const dir = await mkdtemp(join(tmpdir(), 'firstch-mt-'));
+    const inPath = join(dir, 'sales.csv');
+    const outPath = join(dir, 'sales.md');
+    await wf(inPath, 'name,qty\nnote,3\n', 'utf8');
+    const rf1 = await markdownTable({ path: inPath, outputPath: outPath });
+    assert.equal(rf1.output, outPath);
+    assert.equal(rf1.text, undefined);
+    assert.equal(rf1.source.name, 'sales.csv');
+    assert.equal(await rf(outPath, 'utf8'), '| name | qty |\n| ---- | --: |\n| note |   3 |\n');
+    await rm(dir, { recursive: true, force: true });
+  }
+
+  // 不正な引数は MarkdownTableError
+  await assert.rejects(() => markdownTable({}), MarkdownTableError);
+  await assert.rejects(() => markdownTable({ text: 'a', path: '/tmp/x' }), MarkdownTableError);
+  await assert.rejects(() => markdownTable({ text: 'a,b', from: 'xml' }), MarkdownTableError);
+  await assert.rejects(() => markdownTable({ text: 'a,b', to: 'xml' }), MarkdownTableError);
+  await assert.rejects(() => markdownTable({ text: 'a,b', header: 'last' }), MarkdownTableError);
+  await assert.rejects(() => markdownTable({ text: 'a,b', align: 'middle' }), MarkdownTableError);
+  await assert.rejects(() => markdownTable({ text: 'a,b', aligns: 'left' }), MarkdownTableError);
+  await assert.rejects(() => markdownTable({ text: 'a,b', aligns: ['middle'] }), MarkdownTableError);
+  await assert.rejects(() => markdownTable({ text: '   \n\n' }), MarkdownTableError);
 }
 
 

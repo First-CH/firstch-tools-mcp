@@ -4,7 +4,7 @@
 // returns all 22 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -72,6 +72,7 @@ try {
     'jsonld_generate',
     'jwt_decode',
     'llmstxt_generate',
+    'markdown_table',
     'marp_render',
     'px_rem_convert',
     'testdata_generate',
@@ -407,6 +408,23 @@ try {
 
   const arErr = await request('tools/call', { name: 'aspect_ratio_calc', arguments: { width: 1920 } }, 49);
   assert.ok(arErr.result?.isError, `aspect_ratio_calc should require ratio or both sides: ${JSON.stringify(arErr)}`);
+
+  // markdown_table: 全角混じりのTSVを桁揃えしたMarkdownの表へ（数値の列は右寄せ）
+  const mtRes = await callTool('markdown_table', { text: '商品名\t単価\n和紙ノート\t1,200\n' }, 50);
+  assert.equal(mtRes.text,
+    '| 商品名     |  単価 |\n| ---------- | ----: |\n| 和紙ノート | 1,200 |\n',
+    `markdown_table text mismatch: ${JSON.stringify(mtRes.text)}`);
+  assert.equal(mtRes.source?.format, 'tsv', `markdown_table source mismatch: ${JSON.stringify(mtRes.source)}`);
+  assert.equal(mtRes.columns, 2, `markdown_table columns mismatch: ${JSON.stringify(mtRes.columns)}`);
+  assert.deepEqual(mtRes.aligns, ['none', 'right'], `markdown_table aligns mismatch: ${JSON.stringify(mtRes.aligns)}`);
+
+  // Markdownの表はCSVへ戻せる（配置を読み、<br> は改行に戻して引用符で囲む）
+  const mtBack = await callTool('markdown_table', { text: '| a | b |\n| :-- | --: |\n| 1 | x<br>y |\n', to: 'csv' }, 51);
+  assert.equal(mtBack.text, 'a,b\n1,"x\ny"\n', `markdown_table csv mismatch: ${JSON.stringify(mtBack.text)}`);
+  assert.equal(mtBack.source?.format, 'markdown', `markdown_table should detect markdown: ${JSON.stringify(mtBack.source)}`);
+
+  const mtErr = await request('tools/call', { name: 'markdown_table', arguments: {} }, 52);
+  assert.ok(mtErr.result?.isError, `markdown_table should require text or path: ${JSON.stringify(mtErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

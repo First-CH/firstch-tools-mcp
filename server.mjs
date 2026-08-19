@@ -23,6 +23,7 @@ import { jwtDecode } from './jwt.mjs';
 import { userAgentParse } from './user-agent.mjs';
 import { uuidGenerate, MAX_COUNT as UUID_MAX_COUNT } from './uuid.mjs';
 import { aspectRatioCalc } from './aspect-ratio.mjs';
+import { markdownTable } from './markdown-table.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -908,6 +909,64 @@ server.registerTool(
   async (opts) => {
     await logUsage('aspect_ratio_calc');
     return asText(aspectRatioCalc(opts));
+  },
+);
+
+server.registerTool(
+  'markdown_table',
+  {
+    title: 'TSV/CSV → Markdownテーブル整形・相互変換',
+    description:
+      'ExcelやスプレッドシートからコピーしたTSV/CSV（クリップボードの中身はカンマ区切りではなくタブ区切り）を' +
+      'Markdownの表へ整形し、逆にMarkdownの表をCSV/TSV/HTML/JSONへ書き出す（tools.first-ch.com/markdown-table/ と同一ロジック）。' +
+      '区切り文字はタブ・カンマ・セミコロンのそれぞれで実際に読んでみて「列数がいちばん揃うもの」を選ぶ方式で自動判定するため、' +
+      '金額の桁区切り（1,200）が入っていても列がずれない。CSVはRFC 4180の引用符（セル内のカンマ・改行・"" ）に対応。' +
+      '桁揃えでは全角文字をUnicodeのEast Asian Width（Wide / Fullwidth）に従って2桁として数えるので、等幅フォントで縦線が揃う。' +
+      '空でないセルがすべて数値（桁区切り・小数点・通貨記号・%・単位を含む）の列は自動で右寄せ（---:）にし、aligns で列ごとに指定もできる。' +
+      'セルの中の | は \\| へエスケープし、セル内の改行は <br> か半角スペースへ置換し、列数が足りない行には空セルを補う（直した件数は notes で返す）。' +
+      'Markdownを読むときは区切り行のコロンから配置を読み取り、<br> は改行へ戻すので、CSVへ書き出せばセル内改行のあるデータとして表計算ソフトへ戻せる。' +
+      'text か path のどちらか一方を渡す。outputPath を渡すとファイルへ書き出す（本文は返さない）。' +
+      '完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      text: z.string().optional().describe('対象のテキスト（TSV / CSV / セミコロン区切り / Markdownの表。path と排他）'),
+      path: z.string().optional().describe('対象ファイルの絶対パス（UTF-8として読む。text と排他）'),
+      outputPath: z.string().optional().describe('結果を書き出す絶対パス（指定すると text は返さない）'),
+      from: z
+        .enum(['auto', 'tsv', 'csv', 'ssv', 'markdown'])
+        .optional()
+        .describe("入力の形式（既定 'auto'=自動判定。ssv はセミコロン区切り）"),
+      to: z
+        .enum(['markdown', 'csv', 'tsv', 'ssv', 'html', 'json'])
+        .optional()
+        .describe("出力の形式（既定 'markdown'。json は見出しをキーにしたオブジェクトの配列）"),
+      header: z
+        .enum(['first', 'auto', 'none'])
+        .optional()
+        .describe("1行目の扱い（既定 'first'=見出し。'auto'=col1… を振る / 'none'=見出しを空欄にする）"),
+      align: z
+        .enum(['auto', 'none', 'left', 'center', 'right'])
+        .optional()
+        .describe("全列の配置（既定 'auto'=元のMarkdownの指定を引き継ぎ、数値列は右寄せ）"),
+      aligns: z
+        .array(z.enum(['none', 'left', 'center', 'right']))
+        .optional()
+        .describe('列ごとの配置（align より優先。左から順に対応させる）'),
+      pad: z.boolean().optional().describe('桁を揃えるか（既定 true。Markdown出力のみ。表示結果は変わらずソースが読みやすくなる）'),
+      eastAsian: z.boolean().optional().describe('全角を2桁として数えるか（既定 true。等幅フォントで縦線を揃えるため）'),
+      autoNumber: z.boolean().optional().describe('数値だけの列を右寄せにするか（既定 true）'),
+      trim: z.boolean().optional().describe('セルの前後の空白を削るか（既定 true）'),
+      skipEmpty: z.boolean().optional().describe('空行を飛ばすか（既定 true）'),
+      transpose: z.boolean().optional().describe('行と列を入れ替えるか（既定 false）'),
+      multiline: z
+        .enum(['br', 'space'])
+        .optional()
+        .describe("セル内の改行の書き方（既定 'br'=<br>。'space' は半角スペースへ潰す）"),
+      eol: z.enum(['lf', 'crlf']).optional().describe("出力の改行コード（既定 'lf'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('markdown_table');
+    return asText(await markdownTable(opts));
   },
 );
 
