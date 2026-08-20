@@ -47,6 +47,7 @@ import {
   mtTranspose, mtAutoAligns, mtBuildMarkdown, mtBuildDelimited, mtBuildHtml, mtBuildJson,
   mtIsNumeric, mtQuote, MarkdownTableError,
 } from './markdown-table.mjs';
+import { sqlFormatTool, sqlFormat, sqlTokenize, sqlMergeKeywords, SqlFormatError } from './sql-format.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -2453,6 +2454,145 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => markdownTable({ text: 'a,b', aligns: 'left' }), MarkdownTableError);
   await assert.rejects(() => markdownTable({ text: 'a,b', aligns: ['middle'] }), MarkdownTableError);
   await assert.rejects(() => markdownTable({ text: '   \n\n' }), MarkdownTableError);
+}
+
+// ==================== sql_format ====================
+{
+  // 字句: 文字列・引用符付き識別子・コメント・プレースホルダを1トークンにまとめる
+  const lx = sqlTokenize("select a from t where s = 'o''brien' -- c\nand b = ? /* x */");
+  const types = lx.tokens.map((t) => t.type);
+  assert.equal(types.filter((t) => t === 'string').length, 1);
+  assert.equal(lx.tokens.find((t) => t.type === 'string').value, "'o''brien'");
+  assert.equal(types.filter((t) => t === 'lineComment').length, 1);
+  assert.equal(types.filter((t) => t === 'blockComment').length, 1);
+  assert.equal(types.filter((t) => t === 'param').length, 1);
+  assert.equal(lx.unterminatedString, false);
+  assert.equal(sqlTokenize("select 'x").unterminatedString, true);
+  assert.equal(sqlTokenize('select a /* x').unterminatedComment, true);
+  // 方言（バッククォート・角括弧・ドル引用符・キャスト・JSON演算子）を壊さない
+  const dia = sqlTokenize('select `a`, [b], x::text, j->>\'k\', $$body$$ from t');
+  assert.equal(dia.tokens.filter((t) => t.type === 'quoted').length, 2);
+  assert.equal(dia.tokens.filter((t) => t.value === '::').length, 1);
+  assert.equal(dia.tokens.filter((t) => t.value === '->>').length, 1);
+  assert.equal(dia.tokens.filter((t) => t.type === 'string' && t.value === '$$body$$').length, 1);
+
+  // 語の並びを1つの構文キーワードへまとめる
+  const merged = sqlMergeKeywords(sqlTokenize('select a from t left outer join u group by a order by a').tokens);
+  const uppers = merged.map((t) => t.upper);
+  assert.ok(uppers.includes('LEFT OUTER JOIN'));
+  assert.ok(uppers.includes('GROUP BY'));
+  assert.ok(uppers.includes('ORDER BY'));
+
+  // 1行のSQLを句ごとに改行して字下げする
+  const basic = sqlFormat("select o.id, u.name as n from orders o inner join users u on u.id=o.uid where o.a=1 and o.b=2 order by o.id desc");
+  assert.equal(basic.text,
+    'SELECT\n    o.id,\n    u.name AS n\nFROM orders o\nINNER JOIN users u\n    ON u.id = o.uid\n'
+    + 'WHERE o.a = 1\n    AND o.b = 2\nORDER BY o.id DESC\n');
+
+  // 整形は冪等（整形済みを再整形しても変わらない）
+  assert.equal(sqlFormat(basic.text).text, basic.text);
+
+  // BETWEEN の AND は条件の区切りではないので改行しない
+  assert.equal(sqlFormat("select a from t where d between '2026-01-01' and '2026-06-30' and b = 1").text,
+    "SELECT\n    a\nFROM t\nWHERE d BETWEEN '2026-01-01' AND '2026-06-30'\n    AND b = 1\n");
+
+  // サブクエリだけ字下げし、関数呼び出しとIN(値) は1行のまま保つ
+  const sub = sqlFormat('select sum(a) from t where id in (select id from u) and x in (1, 2, 3)');
+  assert.equal(sub.text,
+    'SELECT\n    SUM(a)\nFROM t\nWHERE id IN (\n    SELECT\n        id\n    FROM u\n)\n    AND x IN (1, 2, 3)\n');
+  assert.equal(sub.depth, 1);
+  // ウィンドウ関数の括弧の中の句は折り返さない
+  assert.equal(sqlFormat('select row_number() over (partition by d order by s desc) as rk from e').text,
+    'SELECT\n    ROW_NUMBER() OVER (PARTITION BY d ORDER BY s DESC) AS rk\nFROM e\n');
+  // CASE 式は WHEN / ELSE / END を縦に並べる
+  assert.equal(sqlFormat("select case when a then 1 else 2 end as c from t").text,
+    'SELECT\n    CASE\n        WHEN a THEN 1\n        ELSE 2\n    END AS c\nFROM t\n');
+  // SELECT * は1行のまま、INSERT INTO の列の並びは識別子と ( の間を空ける
+  assert.equal(sqlFormat('select * from t').text, 'SELECT *\nFROM t\n');
+  assert.equal(sqlFormat("insert into users (id, name) values (1, 'a'), (2, 'b')").text,
+    "INSERT INTO users (id, name)\nVALUES\n    (1, 'a'),\n    (2, 'b')\n");
+  // 複数ステートメントは空行で区切る
+  const two = sqlFormat('select 1; select 2;');
+  assert.equal(two.statements, 2);
+  assert.ok(two.text.includes(';\n\nSELECT'));
+
+  // 識別子・文字列・コメントには触れない（予約語と型名だけ表記を揃える）
+  const keep = sqlFormat("select MixedCase, \"Quoted\", 'Value' from Tbl -- Comment");
+  assert.ok(keep.text.includes('MixedCase'));
+  assert.ok(keep.text.includes('"Quoted"'));
+  assert.ok(keep.text.includes("'Value'"));
+  assert.ok(keep.text.includes('Tbl'));
+  assert.ok(keep.text.includes('-- Comment'));
+  assert.equal(sqlFormat('select a from t', { keywordCase: 'lower' }).text, 'select\n    a\nfrom t\n');
+  assert.equal(sqlFormat('SeLeCt a FROM t', { keywordCase: 'preserve' }).text, 'SeLeCt\n    a\nFROM t\n');
+
+  // スタイルの切り替え
+  assert.equal(sqlFormat('select a, b from t', { indent: '2' }).text, 'SELECT\n  a,\n  b\nFROM t\n');
+  assert.equal(sqlFormat('select a, b from t', { indent: 'tab' }).text, 'SELECT\n\ta,\n\tb\nFROM t\n');
+  assert.equal(sqlFormat('select a, b from t', { commaStyle: 'leading' }).text, 'SELECT\n    a\n    , b\nFROM t\n');
+  assert.equal(sqlFormat('select a from t where a=1 and b=2', { logicStyle: 'trailing' }).text,
+    'SELECT\n    a\nFROM t\nWHERE a = 1 AND\n    b = 2\n');
+  assert.equal(sqlFormat('select a, b from t', { breakColumns: false }).text, 'SELECT a, b\nFROM t\n');
+  assert.equal(sqlFormat('select a from t where a=1', { expandClauses: true }).text,
+    'SELECT\n    a\nFROM\n    t\nWHERE\n    a = 1\n');
+  assert.equal(sqlFormat('select a,\n  b\nfrom t\nwhere a = 1', { compact: true }).text,
+    'SELECT a, b FROM t WHERE a = 1\n');
+  assert.equal(sqlFormat('select a from t', { eol: 'crlf' }).text, 'SELECT\r\n    a\r\nFROM t\r\n');
+  assert.equal(sqlFormat('', {}).text, '');
+
+  // 指摘
+  const codes = (sql, o) => sqlFormat(sql, o).notes.map((n) => n.code);
+  assert.ok(codes('delete from logs').includes('NO_WHERE'));
+  assert.ok(codes('update t set a=1').includes('NO_WHERE'));
+  assert.ok(!codes('delete from logs where id=1').includes('NO_WHERE'));
+  assert.ok(codes('select * from t').includes('SELECT_STAR'));
+  assert.ok(codes('select a from t1, t2 where t1.id=t2.id').includes('IMPLICIT_JOIN'));
+  assert.ok(codes('select a from t where id = ?').includes('PLACEHOLDERS'));
+  assert.ok(codes('select a from t where (a=1').includes('UNBALANCED_OPEN'));
+  assert.ok(codes('select a from t)').includes('UNBALANCED_CLOSE'));
+  assert.ok(codes("select 'x from t").includes('UNTERMINATED_STRING'));
+  assert.ok(codes('select a from t /* x').includes('UNTERMINATED_COMMENT'));
+  assert.ok(codes('select a from t').includes('CASED'));
+  assert.ok(!codes('SELECT a FROM t').includes('CASED'));
+
+  // MCPラッパー: 統計・オプション・指摘の文面
+  const r1 = await sqlFormatTool({ text: 'select a,b from t where a=1 and b=2' });
+  assert.equal(r1.text, 'SELECT\n    a,\n    b\nFROM t\nWHERE a = 1\n    AND b = 2\n');
+  assert.equal(r1.lines, 6);
+  assert.equal(r1.statements, 1);
+  assert.equal(r1.subquery_depth, 0);
+  assert.equal(r1.source.type, 'text');
+  assert.equal(r1.options.keyword_case, 'upper');
+  assert.equal(r1.notes[0].code, 'CASED');
+  assert.ok(r1.notes[0].message.includes('大文字'));
+  const r2 = await sqlFormatTool({ text: 'delete from logs' });
+  assert.ok(r2.notes.some((n) => n.code === 'NO_WHERE' && n.message.includes('全行')));
+
+  // ファイルの読み書き
+  {
+    const { mkdtemp, writeFile: wf, readFile: rf, rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const dir = await mkdtemp(join(tmpdir(), 'firstch-sql-'));
+    const inPath = join(dir, 'report.sql');
+    const outPath = join(dir, 'report.out.sql');
+    await wf(inPath, 'select a from t where b=1\n', 'utf8');
+    const rf1 = await sqlFormatTool({ path: inPath, outputPath: outPath });
+    assert.equal(rf1.output, outPath);
+    assert.equal(rf1.text, undefined);
+    assert.equal(rf1.source.name, 'report.sql');
+    assert.equal(await rf(outPath, 'utf8'), 'SELECT\n    a\nFROM t\nWHERE b = 1\n');
+    await rm(dir, { recursive: true, force: true });
+  }
+
+  // 不正な引数は SqlFormatError
+  await assert.rejects(() => sqlFormatTool({}), SqlFormatError);
+  await assert.rejects(() => sqlFormatTool({ text: 'select 1', path: '/tmp/x' }), SqlFormatError);
+  await assert.rejects(() => sqlFormatTool({ text: 'select 1', keywordCase: 'Title' }), SqlFormatError);
+  await assert.rejects(() => sqlFormatTool({ text: 'select 1', indent: '3' }), SqlFormatError);
+  await assert.rejects(() => sqlFormatTool({ text: 'select 1', commaStyle: 'middle' }), SqlFormatError);
+  await assert.rejects(() => sqlFormatTool({ text: 'select 1', eol: 'cr' }), SqlFormatError);
+  await assert.rejects(() => sqlFormatTool({ text: '   \n' }), SqlFormatError);
 }
 
 

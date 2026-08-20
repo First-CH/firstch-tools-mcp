@@ -4,7 +4,7 @@
 // returns all 22 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -75,6 +75,7 @@ try {
     'markdown_table',
     'marp_render',
     'px_rem_convert',
+    'sql_format',
     'testdata_generate',
     'url_params',
     'user_agent_parse',
@@ -425,6 +426,22 @@ try {
 
   const mtErr = await request('tools/call', { name: 'markdown_table', arguments: {} }, 52);
   assert.ok(mtErr.result?.isError, `markdown_table should require text or path: ${JSON.stringify(mtErr)}`);
+
+  // sql_format: 1行のSQLを句ごとに改行して字下げし、WHEREの無いDELETEは指摘する
+  const sqlRes = await callTool('sql_format', { text: 'select o.id, u.name from orders o inner join users u on u.id=o.uid where o.a=1 and o.b=2' }, 53);
+  assert.equal(sqlRes.text,
+    'SELECT\n    o.id,\n    u.name\nFROM orders o\nINNER JOIN users u\n    ON u.id = o.uid\nWHERE o.a = 1\n    AND o.b = 2\n',
+    `sql_format text mismatch: ${JSON.stringify(sqlRes.text)}`);
+  assert.equal(sqlRes.statements, 1, `sql_format statements mismatch: ${JSON.stringify(sqlRes.statements)}`);
+  assert.equal(sqlRes.options?.indent, '4', `sql_format options mismatch: ${JSON.stringify(sqlRes.options)}`);
+
+  const sqlWarn = await callTool('sql_format', { text: 'delete from logs', compact: true }, 54);
+  assert.equal(sqlWarn.text, 'DELETE FROM logs\n', `sql_format compact mismatch: ${JSON.stringify(sqlWarn.text)}`);
+  assert.ok(sqlWarn.notes?.some((n) => n.code === 'NO_WHERE'),
+    `sql_format should warn about a missing WHERE: ${JSON.stringify(sqlWarn.notes)}`);
+
+  const sqlErr = await request('tools/call', { name: 'sql_format', arguments: {} }, 55);
+  assert.ok(sqlErr.result?.isError, `sql_format should require text or path: ${JSON.stringify(sqlErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

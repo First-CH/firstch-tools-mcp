@@ -24,6 +24,7 @@ import { userAgentParse } from './user-agent.mjs';
 import { uuidGenerate, MAX_COUNT as UUID_MAX_COUNT } from './uuid.mjs';
 import { aspectRatioCalc } from './aspect-ratio.mjs';
 import { markdownTable } from './markdown-table.mjs';
+import { sqlFormatTool } from './sql-format.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -967,6 +968,58 @@ server.registerTool(
   async (opts) => {
     await logUsage('markdown_table');
     return asText(await markdownTable(opts));
+  },
+);
+
+server.registerTool(
+  'sql_format',
+  {
+    title: 'SQLクエリの整形（予約語の大文字化・句ごとの改行・字下げ）',
+    description:
+      'ログやORMが吐いた1行に固まったSQLを、予約語の大文字化・句ごとの改行・字下げの付いたクエリへ整形する' +
+      '（tools.first-ch.com/sql-format/ と同一ロジック）。' +
+      'SELECT / FROM / WHERE / GROUP BY / HAVING / ORDER BY / LIMIT / INSERT INTO / VALUES / UPDATE / SET / ' +
+      'DELETE FROM / WITH / UNION などの句を行頭へ、その中身を1段下げて並べ直す。JOIN は行頭に置いて ON を1段下げ、' +
+      'AND / OR は条件ごとに改行する（BETWEEN a AND b の AND は条件の区切りではないので改行しない）。' +
+      '( の直後が SELECT / WITH / VALUES のときだけサブクエリとみなして改行＋字下げし、' +
+      '関数呼び出し（SUM(…) / IN (1, 2, 3) / OVER (PARTITION BY … ORDER BY …)）は1行のまま保つ。' +
+      'CASE 式は WHEN / ELSE / END を縦に並べる。予約語と型名だけを大文字（または小文字）へ揃え、' +
+      'テーブル名・列名・別名の綴りは変えない（識別子の折りたたみ方がDBごとに違うため）。' +
+      "文字列（'…'）・引用符付き識別子（\"…\" / `…` / […]）・コメント（-- / # / /* … */）・" +
+      'プレースホルダ（? / :name / $1 / @var）はそのまま残す。' +
+      '整形と同時に、WHEREの無いUPDATE/DELETE・閉じていない括弧や引用符・SELECT *・暗黙の結合・プレースホルダの有無を notes で返す。' +
+      'compact=true にすると逆に改行を畳んで1行へ戻す。特定DBのパーサーではなく字句ベースの整形器なので、' +
+      'MySQL・PostgreSQL・SQL Server・SQLite・Oracle の方言も壊さずに通す（構文エラーの検出はしない）。' +
+      'text か path のどちらか一方を渡す。outputPath を渡すとファイルへ書き出す（本文は返さない）。' +
+      '完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      text: z.string().optional().describe('対象のSQL（path と排他）'),
+      path: z.string().optional().describe('対象ファイルの絶対パス（UTF-8として読む。text と排他）'),
+      outputPath: z.string().optional().describe('結果を書き出す絶対パス（指定すると text は返さない）'),
+      keywordCase: z
+        .enum(['upper', 'lower', 'preserve'])
+        .optional()
+        .describe("予約語・型名の表記（既定 'upper'。'preserve' は元の綴りのまま）"),
+      functionCase: z
+        .enum(['upper', 'lower', 'preserve'])
+        .optional()
+        .describe("関数名の表記（既定 'upper'）"),
+      indent: z.enum(['2', '4', '8', 'tab']).optional().describe("インデントの幅（既定 '4'=スペース4つ）"),
+      commaStyle: z.enum(['trailing', 'leading']).optional().describe("カンマの位置（既定 'trailing'=行末）"),
+      logicStyle: z.enum(['leading', 'trailing']).optional().describe("AND / OR の位置（既定 'leading'=行頭）"),
+      breakColumns: z.boolean().optional().describe('SELECT の列・SET の代入・VALUES の行を1行ずつに分けるか（既定 true）'),
+      breakLogic: z.boolean().optional().describe('WHERE / HAVING / ON の AND / OR で折り返すか（既定 true）'),
+      breakOn: z.boolean().optional().describe('JOIN の ON を改行して1段下げるか（既定 true）'),
+      breakCase: z.boolean().optional().describe('CASE 式の WHEN / ELSE / END を縦に並べるか（既定 true）'),
+      breakSubquery: z.boolean().optional().describe('サブクエリの括弧を改行して字下げするか（既定 true）'),
+      expandClauses: z.boolean().optional().describe('FROM や WHERE の中身も次の行から書くか＝完全展開（既定 false）'),
+      compact: z.boolean().optional().describe('改行を畳んで1行にまとめるか（既定 false）'),
+      eol: z.enum(['lf', 'crlf']).optional().describe("出力の改行コード（既定 'lf'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('sql_format');
+    return asText(await sqlFormatTool(opts));
   },
 );
 
