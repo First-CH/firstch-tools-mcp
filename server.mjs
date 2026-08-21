@@ -25,6 +25,7 @@ import { uuidGenerate, MAX_COUNT as UUID_MAX_COUNT } from './uuid.mjs';
 import { aspectRatioCalc } from './aspect-ratio.mjs';
 import { markdownTable } from './markdown-table.mjs';
 import { sqlFormatTool } from './sql-format.mjs';
+import { qrGenerateTool } from './qr.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -1020,6 +1021,48 @@ server.registerTool(
   async (opts) => {
     await logUsage('sql_format');
     return asText(await sqlFormatTool(opts));
+  },
+);
+
+server.registerTool(
+  'qr_generate',
+  {
+    title: 'QRコードの生成（SVG / PNG / 文字の図）',
+    description:
+      'URLやテキストからQRコードを生成し、SVG（ベクター）・PNG・端末に貼れる文字の図で返す' +
+      '（tools.first-ch.com/qr/ と同一ロジック）。' +
+      '符号化（数字 / 英数字 / UTF-8のバイトモードを入力に応じて自動選択）・リード・ソロモン符号による誤り訂正・' +
+      '位置検出パターンや型番情報の配置・8種類のマスクからの自動選択まで自前で実装しており（JIS X 0510 / ISO 18004・型番1〜40）、' +
+      '外部のAPIも画像生成サーバーも使わない。' +
+      '誤り訂正レベルは L（約7%）/ M（約15%）/ Q（約25%）/ H（約30%）から選ぶ（印刷物はQ以上を推奨）。' +
+      'size は出力の一辺（px。SVGでは表示上の初期サイズ）、margin は余白＝クワイエットゾーンのモジュール数で規格の推奨は4' +
+      '（0にすると背景によっては読み取れなくなる）。' +
+      'Wi-Fi（WIFI:T:WPA;S:…;P:…;;）・メール（mailto:）・電話（tel:）・SMS（SMSTO:）・座標（geo:）などの' +
+      '定型書式も、その文字列をそのまま text に渡せばよい。' +
+      'outputPath を渡すとファイルへ書き出す（本文は返さない）。format="png" で outputPath を省いた場合は data URI で返る。' +
+      '容量の上限は数字7089桁・英数字4296文字・バイト2953文字（いずれもレベルL）で、超えるとエラーになる。' +
+      '完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      text: z.string().describe('QRコードにする内容（URL・テキスト。UTF-8）'),
+      ecLevel: z
+        .enum(['L', 'M', 'Q', 'H'])
+        .optional()
+        .describe("誤り訂正レベル（既定 'M'。L=約7% / M=約15% / Q=約25% / H=約30%まで復元できる）"),
+      size: z.number().int().optional().describe('出力の一辺（px。64〜4096・既定 320）'),
+      margin: z.number().int().optional().describe('余白のモジュール数（0〜32・既定 4＝規格の推奨）'),
+      format: z.enum(['svg', 'png', 'text']).optional().describe("出力の形式（既定 'svg'。'text' は端末に貼れる文字の図）"),
+      mode: z
+        .enum(['auto', 'numeric', 'alnum', 'byte'])
+        .optional()
+        .describe("符号化モード（既定 'auto'＝入力に合う最も密なモードを選ぶ）"),
+      mask: z.number().int().optional().describe('マスクパターン（0〜7。省略時は減点の一番低いものを自動選択）'),
+      minVersion: z.number().int().optional().describe('型番の下限（1〜40。指定するとこれより小さい型番は使わない）'),
+      outputPath: z.string().optional().describe('結果を書き出す絶対パス（指定すると本文は返さない）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('qr_generate');
+    return asText(await qrGenerateTool(opts));
   },
 );
 

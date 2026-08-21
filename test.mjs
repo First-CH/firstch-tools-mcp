@@ -48,6 +48,7 @@ import {
   mtIsNumeric, mtQuote, MarkdownTableError,
 } from './markdown-table.mjs';
 import { sqlFormatTool, sqlFormat, sqlTokenize, sqlMergeKeywords, SqlFormatError } from './sql-format.mjs';
+import { qrGenerateTool, qrEncode, qrMatrixToSvg, qrMatrixToText, QrError } from './qr.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -2593,6 +2594,156 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => sqlFormatTool({ text: 'select 1', commaStyle: 'middle' }), SqlFormatError);
   await assert.rejects(() => sqlFormatTool({ text: 'select 1', eol: 'cr' }), SqlFormatError);
   await assert.rejects(() => sqlFormatTool({ text: '   \n' }), SqlFormatError);
+}
+
+// ==================== qr_generate ====================
+{
+  // 「HELLO WORLD」を型番1-Q で符号化した既知の面（規格の例と同じデータ語・誤り訂正語になる）。
+  // マスクは減点規則で自動選択され、この入力では0が選ばれる。
+  const HELLO_Q = [
+    '111111101100001111111',
+    '100000101001001000001',
+    '101110101001101011101',
+    '101110101000001011101',
+    '101110101010001011101',
+    '100000100010001000001',
+    '111111101010101111111',
+    '000000001000000000000',
+    '011010110000101011111',
+    '010000001111000010001',
+    '001101110110001011000',
+    '011011010011010101110',
+    '100010101011101110101',
+    '000000001101001000101',
+    '111111101010000101100',
+    '100000100101101101000',
+    '101110101010001111111',
+    '101110100101010100010',
+    '101110101001011101001',
+    '100000101011110001011',
+    '111111100001011100001',
+  ];
+  const hello = qrEncode('HELLO WORLD', { ecLevel: 'Q' });
+  assert.equal(hello.version, 1);
+  assert.equal(hello.size, 21);
+  assert.equal(hello.mode, 'alnum');
+  assert.equal(hello.mask, 0);
+  assert.deepEqual(hello.modules.map((r) => Array.from(r).join('')), HELLO_Q);
+
+  // 機能パターン: 3隅の位置検出パターンと、常に黒のモジュール
+  for (const [cx, cy] of [[0, 0], [14, 0], [0, 14]]) {
+    for (let i = 0; i < 7; i += 1) {
+      assert.equal(hello.modules[cy][cx + i], 1);
+      assert.equal(hello.modules[cy + i][cx], 1);
+    }
+  }
+  assert.equal(hello.modules[21 - 8][8], 1);
+
+  // モード判定: 数字 > 英数字 > バイト（UTF-8）
+  assert.equal(qrEncode('1234567890').mode, 'numeric');
+  assert.equal(qrEncode('HELLO $%*+-./: 123').mode, 'alnum');
+  assert.equal(qrEncode('hello').mode, 'byte'); // 小文字は英数字モードに無い
+  assert.equal(qrEncode('日本語').mode, 'byte');
+  assert.equal(qrEncode('日本語').byteLength, 9); // UTF-8で1文字3バイト
+  assert.equal(qrEncode('12345', { mode: 'byte' }).mode, 'byte');
+
+  // 型番は入りきる最小のものを選び、誤り訂正を上げるほど大きくなる
+  assert.equal(qrEncode('a').version, 1);
+  assert.ok(qrEncode('a'.repeat(200), { ecLevel: 'H' }).version > qrEncode('a'.repeat(200), { ecLevel: 'L' }).version);
+  assert.equal(qrEncode('a'.repeat(2953), { ecLevel: 'L' }).version, 40);
+  assert.equal(qrEncode('1'.repeat(7089), { ecLevel: 'L' }).version, 40);
+  assert.equal(qrEncode('A'.repeat(4296), { ecLevel: 'L' }).version, 40);
+  assert.equal(qrEncode('a'.repeat(1273), { ecLevel: 'H' }).version, 40);
+  // 規格上の上限を1文字でも超えたら入らない
+  assert.throws(() => qrEncode('a'.repeat(2954), { ecLevel: 'L' }), RangeError);
+  assert.throws(() => qrEncode('1'.repeat(7090), { ecLevel: 'L' }), RangeError);
+  assert.throws(() => qrEncode(''), RangeError);
+  // minVersion を指定すると、それより小さい型番は使わない
+  assert.equal(qrEncode('a', { minVersion: 10 }).version, 10);
+  // マスクは0〜7から選ばれ、指定すればそれが使われる
+  assert.ok(hello.mask >= 0 && hello.mask <= 7);
+  assert.equal(qrEncode('HELLO WORLD', { ecLevel: 'Q', mask: 5 }).mask, 5);
+  assert.notDeepEqual(
+    qrEncode('HELLO WORLD', { ecLevel: 'Q', mask: 5 }).modules.map((r) => Array.from(r).join('')),
+    HELLO_Q,
+  );
+
+  // SVG: viewBox は余白ぶんだけ広がり、黒モジュールはパスにまとめられる
+  const svg = qrMatrixToSvg(hello, { size: 320, margin: 4 });
+  assert.ok(svg.startsWith('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 29 29"'));
+  assert.ok(svg.includes('<rect width="29" height="29" fill="#ffffff"/>'));
+  assert.ok(svg.includes('<path fill="#000000" d="M4 4h7'));
+  assert.ok(svg.endsWith('</svg>'));
+  assert.ok(qrMatrixToSvg(hello, { margin: 0 }).includes('viewBox="0 0 21 21"'));
+  // 背景を描かない指定
+  assert.ok(!qrMatrixToSvg(hello, { light: 'none' }).includes('<rect'));
+
+  // 文字の図: 1モジュール＝2文字ぶん・余白ぶんの行が上下に付く
+  const art = qrMatrixToText(hello, { margin: 2 });
+  const artLines = art.split('\n');
+  artLines.pop(); // 末尾の改行ぶん（余白の行は空白だけなので trimEnd では消えてしまう）
+  assert.equal(artLines.length, 21 + 4);
+  assert.equal(artLines[0].trim(), '');
+  assert.equal(artLines[2].length, (21 + 4) * 2);
+  assert.ok(artLines[2].includes('██'));
+
+  // ツール本体: 既定はSVG・内訳も返す
+  const r = await qrGenerateTool({ text: 'https://tools.first-ch.com/qr/' });
+  assert.equal(r.version, 3);
+  assert.equal(r.modules, 29);
+  assert.equal(r.ec_level, 'M');
+  assert.equal(r.mode, 'byte');
+  assert.equal(r.format, 'svg');
+  assert.equal(r.size, 320);
+  assert.equal(r.margin, 4);
+  assert.equal(r.content.chars, 30);
+  assert.equal(r.content.bytes, 30);
+  assert.equal(r.capacity.data_bits, 252);
+  assert.equal(r.capacity.capacity_bits, 352);
+  assert.equal(r.capacity.used_percent, 72);
+  assert.ok(r.svg.startsWith('<svg'));
+
+  // format=text / png
+  const rt = await qrGenerateTool({ text: 'HELLO', format: 'text', margin: 1 });
+  assert.equal(rt.format, 'text');
+  assert.equal(rt.svg, undefined);
+  assert.ok(rt.text.includes('██'));
+  const rp = await qrGenerateTool({ text: 'HELLO', format: 'png', size: 100 });
+  assert.ok(rp.data_uri.startsWith('data:image/png;base64,iVBORw0KGgo'));
+  assert.ok(rp.bytes > 0);
+
+  // ファイルへの書き出し（本文は返さない）
+  {
+    const { mkdtemp, readFile: rf2, rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const dir = await mkdtemp(join(tmpdir(), 'firstch-qr-'));
+    const svgPath = join(dir, 'code.svg');
+    const pngPath = join(dir, 'code.png');
+    const rf = await qrGenerateTool({ text: 'https://example.com/', outputPath: svgPath });
+    assert.equal(rf.output, svgPath);
+    assert.equal(rf.svg, undefined);
+    assert.ok((await rf2(svgPath, 'utf8')).startsWith('<svg'));
+    const rfp = await qrGenerateTool({ text: 'https://example.com/', format: 'png', outputPath: pngPath });
+    assert.equal(rfp.output, pngPath);
+    assert.equal(rfp.data_uri, undefined);
+    // PNGのシグネチャ
+    const head = await rf2(pngPath);
+    assert.deepEqual(Array.from(head.subarray(0, 8)), [137, 80, 78, 71, 13, 10, 26, 10]);
+    await rm(dir, { recursive: true, force: true });
+  }
+
+  // 不正な引数は QrError（画面側と違い、黙って既定値へ落とさない）
+  await assert.rejects(() => qrGenerateTool({}), QrError);
+  await assert.rejects(() => qrGenerateTool({ text: '' }), QrError);
+  await assert.rejects(() => qrGenerateTool({ text: 'a', ecLevel: 'X' }), QrError);
+  await assert.rejects(() => qrGenerateTool({ text: 'a', format: 'jpeg' }), QrError);
+  await assert.rejects(() => qrGenerateTool({ text: 'a', mode: 'kanji' }), QrError);
+  await assert.rejects(() => qrGenerateTool({ text: 'a', mask: 8 }), QrError);
+  await assert.rejects(() => qrGenerateTool({ text: 'a', size: 32 }), QrError);
+  await assert.rejects(() => qrGenerateTool({ text: 'a', size: 5000 }), QrError);
+  await assert.rejects(() => qrGenerateTool({ text: 'a', margin: -1 }), QrError);
+  await assert.rejects(() => qrGenerateTool({ text: 'a'.repeat(3000) }), QrError);
 }
 
 

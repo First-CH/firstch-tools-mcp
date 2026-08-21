@@ -75,6 +75,7 @@ try {
     'markdown_table',
     'marp_render',
     'px_rem_convert',
+    'qr_generate',
     'sql_format',
     'testdata_generate',
     'url_params',
@@ -442,6 +443,21 @@ try {
 
   const sqlErr = await request('tools/call', { name: 'sql_format', arguments: {} }, 55);
   assert.ok(sqlErr.result?.isError, `sql_format should require text or path: ${JSON.stringify(sqlErr)}`);
+
+  // qr_generate: URLからQRコードのSVGを作り、型番と誤り訂正の内訳を返す
+  const qrRes = await callTool('qr_generate', { text: 'https://tools.first-ch.com/qr/' }, 56);
+  assert.equal(qrRes.version, 3, `qr_generate version mismatch: ${JSON.stringify(qrRes.version)}`);
+  assert.equal(qrRes.modules, 29, `qr_generate modules mismatch: ${JSON.stringify(qrRes.modules)}`);
+  assert.equal(qrRes.ec_level, 'M', `qr_generate ec_level mismatch: ${JSON.stringify(qrRes.ec_level)}`);
+  assert.ok(qrRes.svg?.startsWith('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 37 37"'),
+    `qr_generate svg mismatch: ${JSON.stringify(qrRes.svg?.slice(0, 120))}`);
+
+  const qrText = await callTool('qr_generate', { text: '12345', format: 'text', margin: 0, ecLevel: 'H' }, 57);
+  assert.equal(qrText.mode, 'numeric', `qr_generate mode mismatch: ${JSON.stringify(qrText.mode)}`);
+  assert.ok(qrText.text?.includes('██'), `qr_generate text art mismatch: ${JSON.stringify(qrText.text?.slice(0, 40))}`);
+
+  const qrErr = await request('tools/call', { name: 'qr_generate', arguments: { text: 'a', ecLevel: 'Z' } }, 58);
+  assert.ok(qrErr.result?.isError, `qr_generate should reject an unknown ecLevel: ${JSON.stringify(qrErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();
