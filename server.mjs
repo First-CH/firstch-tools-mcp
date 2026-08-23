@@ -26,6 +26,7 @@ import { aspectRatioCalc } from './aspect-ratio.mjs';
 import { markdownTable } from './markdown-table.mjs';
 import { sqlFormatTool } from './sql-format.mjs';
 import { qrGenerateTool } from './qr.mjs';
+import { unixtimeConvert } from './unixtime.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -1063,6 +1064,51 @@ server.registerTool(
   async (opts) => {
     await logUsage('qr_generate');
     return asText(await qrGenerateTool(opts));
+  },
+);
+
+server.registerTool(
+  'unixtime_convert',
+  {
+    title: 'UNIXタイムスタンプ⇄日時の相互変換',
+    description:
+      'UNIX秒・ミリ秒・マイクロ秒・ナノ秒と、ISO 8601や日時文字列を相互に変換する' +
+      '（tools.first-ch.com/unixtime/ と同一ロジック）。ログに出ている数値が結局いつなのかの確認、' +
+      '期限や有効期限の突き合わせ、タイムゾーンをまたぐ時刻のすり合わせに使う。' +
+      '数値の単位は桁数から自動判定する（10桁までを秒 / 13桁までをミリ秒 / 16桁までをマイクロ秒 / それ以上をナノ秒）。' +
+      'unit を渡せば自動判定を使わずその単位で読む。ミリ秒より下の桁は切り捨て、その旨を notes で返す。' +
+      '日時側は 2026-08-24T09:30:00Z（ISO 8601）・2026-08-24 18:30・2026/8/24 9:05・2026年8月24日 18時30分・' +
+      'Sun, 24 Aug 2026 03:00:00 GMT（HTTP-date）・now を受け付け、' +
+      'CSVやJSONから貼ったときの引用符・角括弧・行末カンマは自動で外す。' +
+      'input は1行1件で最大500行まとめて変換でき、行ごとにUNIX秒・ミリ秒・ISO 8601（UTC）・' +
+      '指定タイムゾーンの現地時刻（曜日・UTCオフセット付き）・相対表示（○分前 / ○日後）を返す。' +
+      '読めなかった行は他の行を巻き込まず、その行だけ error として返す。' +
+      '**オフセットを持たない日時は timeZone の壁時計として解釈**し、必ず notes で明示する' +
+      '（+09:00 や Z が入力にあれば timeZone より入力側が優先される）。' +
+      '夏時間で存在しない時刻は切り替え後へ繰り上げ、こちらも notes に出す。' +
+      '8桁の数字（20260824）はUNIX秒として読むため、日付のつもりの入力には notes で注意を返す。' +
+      '負の値（1970年より前）と小数点付きの秒にも対応する。' +
+      '完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      input: z.string().describe('変換する値（1行1件。UNIX秒/ミリ秒/マイクロ秒/ナノ秒・ISO 8601・日時文字列・now）'),
+      timeZone: z
+        .string()
+        .optional()
+        .describe("現地時刻に使うIANAタイムゾーン名（既定 'UTC'。例: Asia/Tokyo / America/New_York）"),
+      unit: z
+        .enum(['auto', 's', 'ms', 'us', 'ns'])
+        .optional()
+        .describe("数値の単位（既定 'auto'＝桁数から自動判定。s=秒 / ms=ミリ秒 / us=マイクロ秒 / ns=ナノ秒）"),
+      now: z
+        .union([z.number(), z.string()])
+        .optional()
+        .describe('相対表示の基準時刻（UNIXミリ秒の数値か日時文字列。既定は実行時刻）'),
+      lang: z.enum(['ja', 'en']).optional().describe("ラベル・相対表示・注記の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('unixtime_convert');
+    return asText(unixtimeConvert(opts.input, opts));
   },
 );
 

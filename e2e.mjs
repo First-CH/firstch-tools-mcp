@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 22 registered tools, and `tools/call` actually executes handlers
+// returns all 26 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -78,6 +78,7 @@ try {
     'qr_generate',
     'sql_format',
     'testdata_generate',
+    'unixtime_convert',
     'url_params',
     'user_agent_parse',
     'uuid_generate',
@@ -458,6 +459,28 @@ try {
 
   const qrErr = await request('tools/call', { name: 'qr_generate', arguments: { text: 'a', ecLevel: 'Z' } }, 58);
   assert.ok(qrErr.result?.isError, `qr_generate should reject an unknown ecLevel: ${JSON.stringify(qrErr)}`);
+
+  // unixtime_convert: UNIX秒を日本時間へ直し、逆方向（日時→秒）と単位の自動判定も確かめる
+  const utRes = await callTool(
+    'unixtime_convert',
+    { input: '1755999999\n1755999999123\n2026-08-24T09:30:00Z\nnope', timeZone: 'Asia/Tokyo', now: '2026-08-24T09:00:00Z' },
+    59,
+  );
+  assert.equal(utRes.converted, 3, `unixtime_convert converted mismatch: ${JSON.stringify(utRes.converted)}`);
+  assert.equal(utRes.unreadable, 1, `unixtime_convert unreadable mismatch: ${JSON.stringify(utRes.unreadable)}`);
+  assert.equal(utRes.rows?.[0]?.local, '2025-08-24 10:46:39',
+    `unixtime_convert local mismatch: ${JSON.stringify(utRes.rows?.[0])}`);
+  assert.equal(utRes.rows?.[1]?.read_as, 'UNIXミリ秒',
+    `unixtime_convert unit detection mismatch: ${JSON.stringify(utRes.rows?.[1]?.read_as)}`);
+  assert.equal(utRes.rows?.[2]?.unix_seconds, 1787563800,
+    `unixtime_convert reverse mismatch: ${JSON.stringify(utRes.rows?.[2])}`);
+  assert.equal(utRes.rows?.[2]?.relative, '30分後',
+    `unixtime_convert relative mismatch: ${JSON.stringify(utRes.rows?.[2]?.relative)}`);
+  assert.equal(utRes.rows?.[3]?.error?.code, 'unparsable',
+    `unixtime_convert should flag the unreadable line: ${JSON.stringify(utRes.rows?.[3])}`);
+
+  const utErr = await request('tools/call', { name: 'unixtime_convert', arguments: { input: '1755999999', timeZone: 'Mars/Olympus' } }, 60);
+  assert.ok(utErr.result?.isError, `unixtime_convert should reject an unknown time zone: ${JSON.stringify(utErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

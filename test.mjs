@@ -49,6 +49,7 @@ import {
 } from './markdown-table.mjs';
 import { sqlFormatTool, sqlFormat, sqlTokenize, sqlMergeKeywords, SqlFormatError } from './sql-format.mjs';
 import { qrGenerateTool, qrEncode, qrMatrixToSvg, qrMatrixToText, QrError } from './qr.mjs';
+import { unixtimeConvert, UnixTimeError } from './unixtime.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -2744,6 +2745,108 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => qrGenerateTool({ text: 'a', size: 5000 }), QrError);
   await assert.rejects(() => qrGenerateTool({ text: 'a', margin: -1 }), QrError);
   await assert.rejects(() => qrGenerateTool({ text: 'a'.repeat(3000) }), QrError);
+}
+
+
+// ==================== unixtime_convert ====================
+{
+  const NOW = Date.UTC(2026, 7, 24, 9, 0, 0); // 2026-08-24T09:00:00Z（相対表示の基準を固定する）
+  const conv = (input, opts = {}) => unixtimeConvert(input, { timeZone: 'Asia/Tokyo', now: NOW, ...opts });
+  const one = (input, opts) => conv(input, opts).rows[0];
+
+  // 単位の自動判定（桁数）。同じ瞬間を指す4通りが同じ結果になる
+  assert.equal(one('1755999999').read_as, 'UNIX秒');
+  assert.equal(one('1755999999').iso_utc, '2025-08-24T01:46:39Z');
+  assert.equal(one('1755999999').unix_millis, 1755999999000);
+  assert.equal(one('1755999999123').read_as, 'UNIXミリ秒');
+  assert.equal(one('1755999999123').iso_utc, '2025-08-24T01:46:39.123Z');
+  assert.equal(one('1755999999123456').read_as, 'UNIXマイクロ秒');
+  assert.equal(one('1755999999123456789').read_as, 'UNIXナノ秒');
+  assert.equal(one('1755999999123456789').unix_millis, 1755999999123);
+  // ミリ秒より下は切り捨て、その旨を必ず返す
+  assert.ok(one('1755999999123456').notes.some((n) => n.code === 'truncated'));
+  assert.equal(one('1755999999').notes.length, 0);
+
+  // 単位の明示（自動判定と違う読み方をさせられる）
+  assert.equal(one('1755999999', { unit: 'ms' }).iso_utc, '1970-01-21T07:46:39.999Z');
+  assert.equal(one('1755999999123456', { unit: 'us' }).unix_seconds, 1755999999);
+
+  // 現地時刻・UTCオフセット・曜日
+  const tokyo = one('1755999999');
+  assert.equal(tokyo.local, '2025-08-24 10:46:39');
+  assert.equal(tokyo.utc_offset, '+09:00');
+  assert.equal(tokyo.weekday, '日');
+  assert.equal(tokyo.iso_local, '2025-08-24T10:46:39+09:00');
+  assert.equal(one('1755999999', { timeZone: 'UTC' }).local, '2025-08-24 01:46:39');
+  assert.equal(one('1755999999', { timeZone: 'America/New_York' }).utc_offset, '-04:00'); // 夏時間
+
+  // 日時 → タイムスタンプ（逆方向）
+  assert.equal(one('2026-08-24T09:30:00Z').unix_seconds, 1787563800);
+  assert.equal(one('2026-08-24T18:30:00+09:00').unix_seconds, 1787563800);
+  assert.equal(one('2026-08-24 18:30').unix_seconds, 1787563800); // timeZone=Asia/Tokyo として解釈
+  assert.equal(one('2026/8/24 18:30').unix_seconds, 1787563800);
+  assert.equal(one('2026年8月24日 18時30分').unix_seconds, 1787563800);
+  assert.equal(one('Mon, 24 Aug 2026 09:30:00 GMT').unix_seconds, 1787563800);
+  assert.equal(one('now').unix_millis, NOW);
+  // オフセットの無い入力は「選択中のタイムゾーンとして読んだ」ことを必ず明示する
+  assert.ok(one('2026-08-24 18:30').notes.some((n) => n.code === 'zoneAssumed'));
+  assert.equal(one('2026-08-24T09:30:00Z').notes.length, 0);
+  // 入力にオフセットがあれば timeZone より優先される
+  assert.equal(one('2026-08-24T09:30:00Z', { timeZone: 'America/New_York' }).unix_seconds, 1787563800);
+
+  // 貼り付けで付いてくる引用符・角括弧・行末カンマを外す
+  assert.equal(one('  "1755999999",  ').unix_seconds, 1755999999);
+  assert.equal(one('[1755999999]').unix_seconds, 1755999999);
+
+  // 相対表示
+  assert.equal(one('now').relative, 'たった今');
+  assert.equal(one('2026-08-24T09:30:00Z').relative, '30分後');
+  assert.equal(one('2026-08-24T08:00:00Z').relative, '1時間前');
+  assert.equal(one('2027-08-24T09:00:00Z').relative, '1年後'); // 365日を「11か月」と言わない
+  assert.equal(one('2026-08-24T09:30:00Z', { lang: 'en' }).relative, 'in 30 minutes');
+  assert.equal(one('1755999999', { lang: 'en' }).read_as, 'Unix seconds');
+
+  // 夏時間: 存在しない壁時計は切り替え後へ繰り上げる（米国の3月第2日曜 2:30）
+  const gap = one('2026-03-08 02:30', { timeZone: 'America/Los_Angeles' });
+  assert.equal(gap.local, '2026-03-08 03:30:00');
+  assert.equal(gap.utc_offset, '-07:00');
+  assert.ok(gap.notes.some((n) => n.code === 'dstShift'));
+
+  // 8桁の数字は日付ではなくUNIX秒（誤読しやすいので注意を返す）
+  assert.equal(one('20260824').iso_utc, '1970-08-23T12:00:24Z');
+  assert.ok(one('20260824').notes.some((n) => n.code === 'ymdLike'));
+
+  // 1970年より前・小数の秒・うるう年
+  assert.equal(one('-86400').iso_utc, '1969-12-31T00:00:00Z');
+  assert.equal(one('1.5').unix_millis, 1500);
+  assert.equal(one('2024-02-29', { timeZone: 'UTC' }).unix_seconds, 1709164800);
+  assert.equal(one('2023-02-29').error.code, 'invalidDate');
+
+  // 複数行: 読めない行だけが error になり、他の行は巻き込まれない
+  const many = conv('1755999999\n\nnope\n2026-08-24T09:30:00Z');
+  assert.equal(many.rows.length, 3); // 空行は行として数えない
+  assert.equal(many.converted, 2);
+  assert.equal(many.unreadable, 1);
+  assert.equal(many.rows[1].error.code, 'unparsable');
+  assert.equal(many.time_zone, 'Asia/Tokyo');
+  assert.equal(many.now.unix_millis, NOW);
+
+  // 上限500行を超えた分は切り、切ったことを返す
+  const over = conv(Array.from({ length: 520 }, (_, i) => String(1755999999 + i)).join('\n'));
+  assert.equal(over.rows.length, 500);
+  assert.ok(over.truncated);
+  assert.equal(conv('1755999999').truncated, undefined);
+
+  // 扱える範囲の外
+  assert.equal(one('99999999999999999999999', { unit: 'ms' }).error.code, 'range');
+
+  // 不正な引数は UnixTimeError（画面側と違い、黙って既定値へ落とさない）
+  assert.throws(() => unixtimeConvert(''), UnixTimeError);
+  assert.throws(() => unixtimeConvert('1755999999', { timeZone: 'Mars/Olympus' }), UnixTimeError);
+  assert.throws(() => unixtimeConvert('1755999999', { unit: 'minutes' }), UnixTimeError);
+  assert.throws(() => unixtimeConvert('1755999999', { now: 'not a date' }), UnixTimeError);
+  // now は日時文字列でも渡せる
+  assert.equal(unixtimeConvert('now', { now: '2026-08-24T09:00:00Z' }).rows[0].unix_millis, NOW);
 }
 
 
