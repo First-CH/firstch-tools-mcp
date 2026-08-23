@@ -140,3 +140,33 @@ jobs:
 
           console.log('Metadata consistency check passed. version =', pkgVersion, ' mcpName =', pkg.mcpName);
           EOF
+
+  # T212: プラグインがピンする版が npm に公開済みかだけを検査する。
+  # package.json と npm の単純一致は要求しない（未公開版でCIが赤くなり
+  # リリースが循環するため・PR #34 レビュー指摘）。plugins/**/.mcp.json の
+  # ピンは「公開済みの版」を指していなければ第三者の /plugin install が壊れる。
+  plugin-pin-published:
+    name: plugin pin points to a published npm version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check pinned versions are on npm
+        run: |
+          set -eu
+          fail=0
+          for f in plugins/*/.mcp.json; do
+            pins=$(grep -o '@first-ch/tools-mcp@[0-9][0-9.]*' "$f" || true)
+            for pin in $pins; do
+              ver="${pin##*@}"
+              if npm view "@first-ch/tools-mcp@$ver" version >/dev/null 2>&1; then
+                echo "OK: $f pins $ver (published)"
+              else
+                echo "NG: $f pins $ver but it is NOT published on npm (/plugin install breaks for third parties)"
+                fail=1
+              fi
+            done
+          done
+          exit $fail
