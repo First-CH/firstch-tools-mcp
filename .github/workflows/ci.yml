@@ -14,9 +14,9 @@ jobs:
       matrix:
         node-version: ['18.14.1', '20', '22']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ matrix.node-version }}
 
@@ -30,7 +30,7 @@ jobs:
     name: vendor checksum (jsquash-webp)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # CHECKSUMS.sha256 pins the exact bytes of the vendored, unmodified
       # @jsquash/webp v1.5.0 subset (comment lines starting with "#" are
@@ -45,9 +45,9 @@ jobs:
     name: package metadata & tarball integrity
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
 
@@ -148,8 +148,8 @@ jobs:
     name: plugin pin is published or the current release candidate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: '22'
       - name: Check pinned versions are published or current
@@ -189,11 +189,11 @@ jobs:
       contents: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
