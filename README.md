@@ -108,7 +108,7 @@ node e2e.mjs     # stdio smoke test: spawns server.mjs, lists tools, calls a cou
 
 CI runs both across Node 18.14.1 / 20 / 22, plus a vendor checksum check and a published-tarball content check — see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
 
-Release rule: `npm publish` is always performed by a human (CI has no publish job by design). When publishing `X.Y.Z`, also push a `vX.Y.Z` git tag in the same sitting, and update `plugins/*/.mcp.json` pins only to versions that are already on npm — CI's `plugin-pin-published` job enforces the latter.
+Release rule: a push to `main` automatically publishes a new package version through npm Trusted Publishing (OIDC) after every CI gate passes. No `NPM_TOKEN`, `npm login`, OTP, or manual approval is used. The workflow verifies npm propagation and creates the matching `vX.Y.Z` tag. Package changes must bump every synchronized version field; if a version already exists with different package contents, CI fails instead of overwriting it. CI-only changes with identical package contents safely skip publishing.
 
 ---
 

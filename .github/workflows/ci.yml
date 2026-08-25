@@ -98,6 +98,7 @@ jobs:
           const fs = require('node:fs');
 
           const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
           const server = JSON.parse(fs.readFileSync('server.json', 'utf8'));
           const plugin = JSON.parse(
             fs.readFileSync('plugins/firstch-tools/.claude-plugin/plugin.json', 'utf8'),
@@ -112,6 +113,8 @@ jobs:
           const npxVersion = npxArg ? npxArg.split('@').pop() : undefined;
 
           const versions = {
+            'package-lock.json#version': lock.version,
+            'package-lock.json#packages[""]#version': lock.packages?.['']?.version,
             'server.json#version': server.version,
             'server.json#packages[0].version': server.packages?.[0]?.version,
             'plugins/firstch-tools/.claude-plugin/plugin.json#version': plugin.version,
