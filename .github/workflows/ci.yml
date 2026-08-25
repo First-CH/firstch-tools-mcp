@@ -141,32 +141,149 @@ jobs:
           console.log('Metadata consistency check passed. version =', pkgVersion, ' mcpName =', pkg.mcpName);
           EOF
 
-  # T212: プラグインがピンする版が npm に公開済みかだけを検査する。
-  # package.json と npm の単純一致は要求しない（未公開版でCIが赤くなり
-  # リリースが循環するため・PR #34 レビュー指摘）。plugins/**/.mcp.json の
-  # ピンは「公開済みの版」を指していなければ第三者の /plugin install が壊れる。
+  # プラグインのピンは、npm公開済みの版か、このpushで公開する
+  # package.json の版だけを許可する。後者を許可しないと、mainへ入る前に
+  # npm公開を要求する循環になり、OIDCによる自動publishが成立しない。
   plugin-pin-published:
-    name: plugin pin points to a published npm version
+    name: plugin pin is published or the current release candidate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Check pinned versions are on npm
+      - name: Check pinned versions are published or current
         run: |
           set -eu
+          candidate="$(node -p "require('./package.json').version")"
           fail=0
           for f in plugins/*/.mcp.json; do
             pins=$(grep -o '@first-ch/tools-mcp@[0-9][0-9.]*' "$f" || true)
             for pin in $pins; do
               ver="${pin##*@}"
-              if npm view "@first-ch/tools-mcp@$ver" version >/dev/null 2>&1; then
+              if [ "$ver" = "$candidate" ]; then
+                echo "OK: $f pins $ver (current release candidate)"
+              elif npm view "@first-ch/tools-mcp@$ver" version >/dev/null 2>&1; then
                 echo "OK: $f pins $ver (published)"
               else
-                echo "NG: $f pins $ver but it is NOT published on npm (/plugin install breaks for third parties)"
+                echo "NG: $f pins $ver, which is neither published nor the current package version $candidate"
                 fail=1
               fi
             done
           done
           exit $fail
+
+  # mainへ入った新しいpackage versionをnpmへ無承認で公開する。
+  # 認証はnpm Trusted Publishing (OIDC)を使い、長寿命のNPM_TOKENは置かない。
+  # 同じversionが既にある場合は内容一致を確認して成功終了し、内容が違えば
+  # versionの上げ忘れとして停止する。publish成功時だけvX.Y.Zタグを作る。
+  publish:
+    name: publish npm package from main
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, vendor-checksum, package-integrity, plugin-pin-published]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: npm-publish-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+
+      # npm Trusted Publishingにはnpm CLI 11.5.1以上が必要。
+      - name: Use an OIDC-capable npm CLI
+        run: npm install --global npm@12.0.2
+
+      - run: npm ci
+
+      - name: Decide whether this version needs publishing
+        id: release
+        run: |
+          set -eu
+          name="$(node -p "require('./package.json').name")"
+          version="$(node -p "require('./package.json').version")"
+          spec="$name@$version"
+
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          if npm view "$spec" version >/dev/null 2>&1; then
+            local_dir="$RUNNER_TEMP/local-package"
+            remote_dir="$RUNNER_TEMP/remote-package"
+            local_extract="$RUNNER_TEMP/local-extract"
+            remote_extract="$RUNNER_TEMP/remote-extract"
+            mkdir -p "$local_dir" "$remote_dir" "$local_extract" "$remote_extract"
+
+            npm pack --pack-destination "$local_dir" >/dev/null
+            npm pack "$spec" --pack-destination "$remote_dir" >/dev/null
+            local_tgz="$(find "$local_dir" -maxdepth 1 -name '*.tgz' -print -quit)"
+            remote_tgz="$(find "$remote_dir" -maxdepth 1 -name '*.tgz' -print -quit)"
+            tar -xzf "$local_tgz" -C "$local_extract"
+            tar -xzf "$remote_tgz" -C "$remote_extract"
+
+            if ! diff -qr "$local_extract/package" "$remote_extract/package"; then
+              echo "Version $spec is already published with different contents." >&2
+              echo "Bump all synchronized version fields before pushing package changes." >&2
+              exit 1
+            fi
+
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "$spec is already published with identical contents; skipping publish."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "$spec is not on npm; it will be published after all CI gates."
+          fi
+
+      - name: Publish to npm with Trusted Publishing
+        if: steps.release.outputs.publish == 'true'
+        run: npm publish
+
+      - name: Verify npm latest
+        if: steps.release.outputs.publish == 'true'
+        env:
+          PACKAGE_NAME: ${{ steps.release.outputs.name }}
+          PACKAGE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -eu
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            published="$(npm view "$PACKAGE_NAME" version 2>/dev/null || true)"
+            if [ "$published" = "$PACKAGE_VERSION" ]; then
+              echo "Verified npm latest: $PACKAGE_NAME@$PACKAGE_VERSION"
+              exit 0
+            fi
+            echo "Waiting for npm propagation ($attempt/10): latest=${published:-unavailable}"
+            sleep 3
+          done
+          echo "npm latest did not become $PACKAGE_VERSION" >&2
+          exit 1
+
+      - name: Tag the published commit
+        if: steps.release.outputs.publish == 'true'
+        env:
+          PACKAGE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -eu
+          tag="v$PACKAGE_VERSION"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            target="$(git rev-list -n 1 "$tag")"
+            if [ "$target" != "$GITHUB_SHA" ]; then
+              echo "$tag already points to $target, not $GITHUB_SHA" >&2
+              exit 1
+            fi
+            echo "$tag already points to this commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "$tag"
+          git push origin "$tag"
