@@ -50,6 +50,7 @@ import {
 import { sqlFormatTool, sqlFormat, sqlTokenize, sqlMergeKeywords, SqlFormatError } from './sql-format.mjs';
 import { qrGenerateTool, qrEncode, qrMatrixToSvg, qrMatrixToText, QrError } from './qr.mjs';
 import { unixtimeConvert, UnixTimeError } from './unixtime.mjs';
+import { robotsTxtGenerate, listAiCrawlers, buildRobotsTxt, AI_CRAWLERS } from './robots-txt.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -2847,6 +2848,145 @@ assert.equal(over.x_postable, false);
   assert.throws(() => unixtimeConvert('1755999999', { now: 'not a date' }), UnixTimeError);
   // now は日時文字列でも渡せる
   assert.equal(unixtimeConvert('now', { now: '2026-08-24T09:00:00Z' }).rows[0].unix_millis, NOW);
+}
+
+
+// ==================== robotstxt_generate ====================
+{
+  // 画面側と同じ形（グループ1つ＋AI設定）で呼ぶ薄い包み
+  const gen = (opts = {}) => {
+    const { disallow, allow, crawlDelay, userAgents, groups, ...rest } = opts;
+    return buildRobotsTxt({
+      groups: groups || [{ userAgents: userAgents == null ? '*' : userAgents, disallow, allow, crawlDelay }],
+      ...rest,
+    });
+  };
+  const codes = (r) => r.warnings.map((w) => w.code);
+
+  // 何も指定しなければ「全許可」の1グループ＋学習用クローラーの拒否（既定プリセット）
+  const base = gen({});
+  assert.match(base.text, /^# robots\.txt/);
+  assert.match(base.text, /User-agent: \*\nDisallow:\n/);
+  assert.equal(base.text.endsWith('\n'), true);
+  assert.equal(base.stats.aiBlocked, AI_CRAWLERS.filter((b) => b.purpose === 'training').length);
+  assert.equal(base.stats.aiAllowed, AI_CRAWLERS.length - base.stats.aiBlocked);
+  assert.ok(base.text.includes('User-agent: GPTBot'));
+  assert.ok(base.text.includes('User-agent: OAI-SearchBot'));
+
+  // 学習用は Disallow: / のグループ、AI検索・都度取得は許可のグループに入る
+  const blocked = base.text.split('# AIクローラー: 許可')[0];
+  assert.ok(blocked.includes('ClaudeBot'));
+  assert.ok(!blocked.includes('Claude-SearchBot'));
+  assert.ok(!blocked.includes('PerplexityBot'));
+
+  // プリセット
+  assert.equal(gen({ ai: { preset: 'none' } }).text.includes('GPTBot'), false);
+  assert.equal(gen({ ai: { preset: 'allow' } }).stats.aiBlocked, 0);
+  assert.equal(gen({ ai: { preset: 'block' } }).stats.aiAllowed, 0);
+  assert.equal(gen({ ai: { preset: 'block' } }).stats.aiBlocked, AI_CRAWLERS.length);
+
+  // 1件ずつの指定はプリセットより優先される
+  const over = gen({ ai: { preset: 'training', overrides: { PerplexityBot: 'block', GPTBot: 'allow' } } });
+  assert.equal(over.ai.blocked.includes('PerplexityBot'), true);
+  assert.equal(over.ai.allowed.includes('GPTBot'), true);
+  // custom は overrides に書いたものだけを出す
+  const only = gen({ ai: { preset: 'custom', overrides: { GPTBot: 'block' } } });
+  assert.deepEqual(only.ai.blocked, ['GPTBot']);
+  assert.deepEqual(only.ai.allowed, []);
+
+  // 共通の禁止パスを許可したAIクローラーのグループへ書き写す（既定）。
+  // クローラーは一致するグループを1つしか読まないため、書き写さないと素通りする
+  const inherited = gen({ disallow: '/admin/\n/cart/', ai: { preset: 'training' } });
+  assert.equal((inherited.text.match(/Disallow: \/admin\//g) || []).length, 2);
+  assert.ok(codes(inherited).includes('aiInherited'));
+  const notInherited = gen({ disallow: '/admin/', ai: { preset: 'training', inherit: false } });
+  assert.equal((notInherited.text.match(/Disallow: \/admin\//g) || []).length, 1);
+
+  // 全体拒否のときは「許可」と書かず、警告も出す（出力と見出しを食い違わせない）
+  const shutOut = gen({ disallow: '/', ai: { preset: 'training' } });
+  assert.ok(shutOut.text.includes('共通ルールでサイト全体を拒否'));
+  assert.ok(codes(shutOut).includes('aiAllowButBlocked'));
+  assert.ok(codes(shutOut).includes('blockAll'));
+
+  // パスの補正: 先頭の / を補う・絶対URLからパスだけ取り出す
+  const fixed = gen({ disallow: 'admin\nhttps://example.com/private/?a=1', ai: { preset: 'none' } });
+  assert.ok(fixed.text.includes('Disallow: /admin'));
+  assert.ok(fixed.text.includes('Disallow: /private/?a=1'));
+  assert.ok(codes(fixed).includes('pathFixed'));
+  assert.ok(codes(fixed).includes('pathFromUrl'));
+
+  // 指摘: 空白・非ASCII・ワイルドカード・Crawl-delay・サイトマップ
+  assert.ok(codes(gen({ disallow: '/a b/' })).includes('pathSpace'));
+  assert.ok(codes(gen({ disallow: '/会社概要/' })).includes('pathNonAscii'));
+  assert.ok(codes(gen({ disallow: '/*.pdf$' })).includes('pathWildcard'));
+  assert.ok(codes(gen({ crawlDelay: 10 })).includes('crawlDelayIgnored'));
+  assert.ok(gen({ crawlDelay: 10 }).text.includes('Crawl-delay: 10'));
+  assert.ok(codes(gen({ crawlDelay: 'soon' })).includes('crawlDelayInvalid'));
+  assert.equal(gen({ crawlDelay: 'soon' }).text.includes('Crawl-delay'), false);
+  assert.ok(codes(gen({})).includes('noSitemap'));
+  assert.ok(codes(gen({ sitemaps: '/sitemap.xml' })).includes('sitemapNotAbsolute'));
+  assert.ok(codes(gen({ groups: [{ userAgents: 'GPTBot' }], ai: { preset: 'block' } })).includes('duplicateAgent'));
+
+  // 同じ指摘は積み上がらない（同じパスを2度書いても1件）
+  const dup = gen({ disallow: '/a b/\n/c d/' });
+  assert.equal(dup.warnings.filter((w) => w.code === 'pathSpace').length, 2);
+  assert.equal(gen({ disallow: '/a b/\n/a b/' }).warnings.filter((w) => w.code === 'pathSpace').length, 1);
+
+  // サイトマップは末尾にまとめて出す
+  const sm = gen({ sitemaps: ['https://example.com/sitemap.xml', 'https://example.com/news.xml'] });
+  assert.match(sm.text, /Sitemap: https:\/\/example\.com\/sitemap\.xml\nSitemap: https:\/\/example\.com\/news\.xml\n$/);
+  assert.equal(sm.stats.sitemaps, 2);
+
+  // コメントの有無・全許可の書き方
+  const bare = gen({ comments: false, ai: { preset: 'none' } });
+  assert.equal(bare.text, 'User-agent: *\nDisallow:\n');
+  assert.equal(gen({ comments: false, ai: { preset: 'none' }, allowStyle: 'allow-slash' }).text,
+    'User-agent: *\nAllow: /\n');
+
+  // 英語
+  const en = gen({ lang: 'en' });
+  assert.ok(en.text.includes('generated with First CH Tools'));
+  assert.ok(en.text.includes('AI crawlers: blocked'));
+  assert.ok(en.warnings.every((w) => !/[぀-ヿ一-鿿]/.test(w.message)));
+
+  // MCP側の入口
+  const viaTool = await robotsTxtGenerate({ siteUrl: 'https://example.com', disallow: ['/admin/'], blockCrawlers: 'AhrefsBot, SemrushBot' });
+  assert.ok(viaTool.text.includes('# 対象サイト: https://example.com'));
+  assert.ok(viaTool.text.includes('User-agent: AhrefsBot'));
+  assert.ok(viaTool.text.includes('User-agent: SemrushBot'));
+
+  // groups を渡すと自分で並べられる
+  const manual = await robotsTxtGenerate({
+    groups: [{ userAgents: 'Googlebot', disallow: '/nogoogle/' }, { userAgents: '*', disallow: '/x/' }],
+    ai: { preset: 'none' },
+    comments: false,
+  });
+  assert.equal(manual.text, 'User-agent: Googlebot\nDisallow: /nogoogle/\n\nUser-agent: *\nDisallow: /x/\n');
+
+  // 一覧だけを返す
+  const list = await robotsTxtGenerate({ listCrawlers: true });
+  assert.equal(list.count, AI_CRAWLERS.length);
+  assert.equal(list.crawlers[0].userAgent, 'GPTBot');
+  assert.equal(listAiCrawlers('en').crawlers[0].description, 'Collects data used to train OpenAI models');
+  assert.deepEqual(list.purposes.map((p) => p.purpose), ['training', 'search', 'user']);
+
+  // 不正な引数は投げる（画面側と違い、黙って既定値へ落とさない）
+  await assert.rejects(() => robotsTxtGenerate({ ai: { preset: 'sometimes' } }), /ai\.preset/);
+  await assert.rejects(() => robotsTxtGenerate({ ai: { overrides: { GPTBot: 'maybe' } } }), /overrides/);
+  await assert.rejects(() => robotsTxtGenerate({ ai: { overrides: { NotACrawler: 'block' } } }), /一覧にないクローラー/);
+  await assert.rejects(() => robotsTxtGenerate({ allowStyle: 'whatever' }), /allowStyle/);
+  await assert.rejects(() => robotsTxtGenerate({ outputPath: 'robots.txt' }), /絶対パス/);
+
+  // outputPath へ書き出す
+  const { readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const tmp = join(tmpdir(), `firstch-robots-${process.pid}.txt`);
+  const written = await robotsTxtGenerate({ outputPath: tmp, ai: { preset: 'none' }, comments: false });
+  assert.equal(written.written, tmp);
+  assert.equal(written.text, undefined);
+  assert.equal(await readFile(tmp, 'utf8'), 'User-agent: *\nDisallow:\n');
+  await rm(tmp, { force: true });
 }
 
 

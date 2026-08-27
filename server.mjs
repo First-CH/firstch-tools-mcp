@@ -27,6 +27,7 @@ import { markdownTable } from './markdown-table.mjs';
 import { sqlFormatTool } from './sql-format.mjs';
 import { qrGenerateTool } from './qr.mjs';
 import { unixtimeConvert } from './unixtime.mjs';
+import { robotsTxtGenerate } from './robots-txt.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -1109,6 +1110,88 @@ server.registerTool(
   async (opts) => {
     await logUsage('unixtime_convert');
     return asText(unixtimeConvert(opts.input, opts));
+  },
+);
+
+server.registerTool(
+  'robotstxt_generate',
+  {
+    title: 'robots.txt の生成（AIクローラー対応）',
+    description:
+      'クロールの許可/禁止ルール・サイトマップ宣言・AIクローラーの許可プリセットから robots.txt を組み立てる' +
+      '（tools.first-ch.com/robots-txt/ と同一ロジック）。サイト公開前の robots.txt の作成、' +
+      '「AIの学習には使わせたくないが、AI検索の結果には出したい」といった書き分けに使う。' +
+      'ai.preset で24種のAIクローラー（GPTBot / OAI-SearchBot / ClaudeBot / Claude-SearchBot / Google-Extended / ' +
+      'PerplexityBot / Bytespider / CCBot など）の扱いをまとめて決められる: ' +
+      "'training'（既定＝学習目的だけ拒否しAI検索と都度取得は許可） / 'allow'（全部許可） / 'block'（全部拒否） / " +
+      "'none'（AIクローラーを書かない） / 'custom'（ai.overrides で1件ずつ指定）。" +
+      '**クローラーは自分に一致するグループを1つだけ読む**ため、AI用のグループを作ると User-agent: * の禁止ルールが' +
+      'そのクローラーへ届かなくなる。既定では共通の禁止パスをAI側のグループへ書き写して取りこぼしを防ぐ' +
+      '（ai.inherit=false で止められる）。' +
+      'パスは先頭の / の補完と絶対URLからのパス抽出を自動で行い、空白を含むパス・パーセントエンコードしていない' +
+      '日本語のパス・ワイルドカード非対応クローラー・Googlebotが読まない Crawl-delay・サイトマップの宣言漏れ・' +
+      '同じUser-agentの重複・サイト全体の拒否などを warnings で返す。' +
+      'listCrawlers=true を渡すと生成せずAIクローラーの一覧（名前・提供元・目的）だけを返す。' +
+      'outputPath を渡すとそのパスへ書き出す。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      siteUrl: z.string().optional().describe('対象サイトのURL（省略可。先頭のコメントに入るだけで動作は変えない）'),
+      disallow: z
+        .union([z.string(), z.array(z.string())])
+        .optional()
+        .describe('拒否するパス（User-agent: * に対する Disallow。改行区切りの文字列か配列。例: /admin/）'),
+      allow: z
+        .union([z.string(), z.array(z.string())])
+        .optional()
+        .describe('拒否の例外として許可するパス（Allow。改行区切りの文字列か配列）'),
+      userAgents: z
+        .union([z.string(), z.array(z.string())])
+        .optional()
+        .describe("基本グループの対象（既定 '*'。カンマまたは改行区切り）"),
+      crawlDelay: z.number().optional().describe('Crawl-delay（秒）。Googlebotは解釈しない（warningsで知らせる）'),
+      blockCrawlers: z
+        .union([z.string(), z.array(z.string())])
+        .optional()
+        .describe('AI以外で個別に拒否したいクローラー名（例: AhrefsBot, SemrushBot）。Disallow: / のグループになる'),
+      sitemaps: z
+        .union([z.string(), z.array(z.string())])
+        .optional()
+        .describe('Sitemap として宣言する絶対URL（改行区切りの文字列か配列）'),
+      ai: z
+        .object({
+          preset: z.enum(['allow', 'block', 'training', 'none', 'custom']).optional()
+            .describe("AIクローラーのプリセット（既定 'training'＝学習目的だけ拒否）"),
+          overrides: z.record(z.enum(['allow', 'block', 'omit'])).optional()
+            .describe("1件ずつの指定（例: {\"GPTBot\": \"block\", \"PerplexityBot\": \"allow\"}）"),
+          inherit: z.boolean().optional()
+            .describe('共通の禁止パスを許可したAIクローラーのグループへ書き写すか（既定 true）'),
+        })
+        .optional()
+        .describe('AIクローラーの扱い'),
+      groups: z
+        .array(
+          z.object({
+            userAgents: z.union([z.string(), z.array(z.string())]).optional(),
+            disallow: z.union([z.string(), z.array(z.string())]).optional(),
+            allow: z.union([z.string(), z.array(z.string())]).optional(),
+            crawlDelay: z.number().optional(),
+            comment: z.string().optional(),
+          }),
+        )
+        .optional()
+        .describe('グループを自分で並べたいとき（指定すると disallow / allow / userAgents / crawlDelay より優先）'),
+      comments: z.boolean().optional().describe('説明のコメント行を入れるか（既定 true）'),
+      allowStyle: z
+        .enum(['disallow-empty', 'allow-slash'])
+        .optional()
+        .describe("すべて許可するときの書き方（既定 'disallow-empty'＝空の Disallow:）"),
+      listCrawlers: z.boolean().optional().describe('生成せずAIクローラーの一覧だけを返す'),
+      lang: z.enum(['ja', 'en']).optional().describe("コメントと指摘事項の言語（既定 'ja'）"),
+      outputPath: z.string().optional().describe('robots.txt を書き出す絶対パス（指定すると本文は返さない）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('robotstxt_generate');
+    return asText(await robotsTxtGenerate(opts));
   },
 );
 

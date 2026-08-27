@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 26 registered tools, and `tools/call` actually executes handlers
+// returns all 27 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -76,6 +76,7 @@ try {
     'marp_render',
     'px_rem_convert',
     'qr_generate',
+    'robotstxt_generate',
     'sql_format',
     'testdata_generate',
     'unixtime_convert',
@@ -481,6 +482,29 @@ try {
 
   const utErr = await request('tools/call', { name: 'unixtime_convert', arguments: { input: '1755999999', timeZone: 'Mars/Olympus' } }, 60);
   assert.ok(utErr.result?.isError, `unixtime_convert should reject an unknown time zone: ${JSON.stringify(utErr)}`);
+
+  // robotstxt_generate: 学習用のAIクローラーだけを拒否し、共通の禁止パスをAI側へ書き写す
+  const rtRes = await callTool(
+    'robotstxt_generate',
+    { siteUrl: 'https://example.com', disallow: '/admin/', sitemaps: 'https://example.com/sitemap.xml' },
+    61,
+  );
+  assert.ok(rtRes.text?.includes('User-agent: GPTBot'),
+    `robotstxt_generate should block GPTBot by default: ${JSON.stringify(rtRes.text?.slice(0, 120))}`);
+  assert.ok(rtRes.text?.includes('User-agent: OAI-SearchBot'),
+    `robotstxt_generate should list OAI-SearchBot as allowed: ${JSON.stringify(rtRes.text?.slice(0, 120))}`);
+  assert.equal((rtRes.text?.match(/Disallow: \/admin\//g) || []).length, 2,
+    `robotstxt_generate should copy the shared disallow into the AI group: ${JSON.stringify(rtRes.text)}`);
+  assert.ok(rtRes.text?.endsWith('Sitemap: https://example.com/sitemap.xml\n'),
+    `robotstxt_generate sitemap mismatch: ${JSON.stringify(rtRes.text?.slice(-80))}`);
+  assert.ok(rtRes.stats?.aiBlocked > 0 && rtRes.stats?.aiAllowed > 0,
+    `robotstxt_generate stats mismatch: ${JSON.stringify(rtRes.stats)}`);
+
+  const rtList = await callTool('robotstxt_generate', { listCrawlers: true }, 62);
+  assert.equal(rtList.count, 24, `robotstxt_generate crawler count mismatch: ${JSON.stringify(rtList.count)}`);
+
+  const rtErr = await request('tools/call', { name: 'robotstxt_generate', arguments: { ai: { preset: 'sometimes' } } }, 63);
+  assert.ok(rtErr.result?.isError, `robotstxt_generate should reject an unknown preset: ${JSON.stringify(rtErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();
