@@ -51,6 +51,7 @@ import { sqlFormatTool, sqlFormat, sqlTokenize, sqlMergeKeywords, SqlFormatError
 import { qrGenerateTool, qrEncode, qrMatrixToSvg, qrMatrixToText, QrError } from './qr.mjs';
 import { unixtimeConvert, UnixTimeError } from './unixtime.mjs';
 import { robotsTxtGenerate, listAiCrawlers, buildRobotsTxt, AI_CRAWLERS } from './robots-txt.mjs';
+import { caseConvertTool, caseConvert, splitWords, joinWords, detectCase, CASE_FORMATS } from './case-convert.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -2987,6 +2988,140 @@ assert.equal(over.x_postable, false);
   assert.equal(written.text, undefined);
   assert.equal(await readFile(tmp, 'utf8'), 'User-agent: *\nDisallow:\n');
   await rm(tmp, { force: true });
+}
+
+// ==================== case_convert ====================
+{
+  // --- 分かち書き（変換の要。ここが崩れると全形式が崩れる） ---
+  assert.deepEqual(splitWords('user_name'), ['user', 'name']);
+  assert.deepEqual(splitWords('firstName'), ['first', 'Name']);
+  assert.deepEqual(splitWords('LAST-NAME'), ['LAST', 'NAME']);
+  assert.deepEqual(splitWords('  --foo__bar--  '), ['foo', 'bar']);
+  // 大文字の連なりは「大文字＋小文字」が続くときだけ手前で切る
+  assert.deepEqual(splitWords('XMLHttpRequest'), ['XML', 'Http', 'Request']);
+  assert.deepEqual(splitWords('getHTTPResponse'), ['get', 'HTTP', 'Response']);
+  assert.deepEqual(splitWords('ID'), ['ID']);
+  // 数字は既定で直前の語へ付く
+  assert.deepEqual(splitWords('sha256Hash'), ['sha256', 'Hash']);
+  assert.deepEqual(splitWords('sha256Hash', { splitDigits: true }), ['sha', '256', 'Hash']);
+  assert.deepEqual(splitWords('HTTP2Server'), ['HTTP2', 'Server']);
+  // 先頭の数字は、続きが小文字のときだけ1語にまとめる
+  assert.deepEqual(splitWords('2fa'), ['2fa']);
+  assert.deepEqual(splitWords('2FactorAuth'), ['2', 'Factor', 'Auth']);
+  // 大小の別を持たない文字は独立した語になり、区切り記号としては働かない
+  assert.deepEqual(splitWords('受注 日付'), ['受注', '日付']);
+  assert.deepEqual(splitWords('ユーザー名ID'), ['ユーザー名', 'ID']);
+
+  // --- 11形式すべて ---
+  const w = splitWords('parseXMLDataV2');
+  assert.deepEqual(w, ['parse', 'XML', 'Data', 'V2']);
+  assert.deepEqual(
+    CASE_FORMATS.map((f) => joinWords(w, f, {})),
+    [
+      'parseXmlDataV2', 'ParseXmlDataV2', 'parse_xml_data_v2', 'PARSE_XML_DATA_V2', 'parse-xml-data-v2',
+      'Parse-Xml-Data-V2', 'parse.xml.data.v2', 'Parse Xml Data V2', 'Parse xml data v2', 'parse xml data v2',
+      'PARSE XML DATA V2',
+    ],
+  );
+  // 頭字語を残すのは大文字始まりの形式だけ（snake_case で user_ID にはしない）
+  assert.equal(joinWords(w, 'pascal', { keepAcronyms: true }), 'ParseXMLDataV2');
+  assert.equal(joinWords(w, 'snake', { keepAcronyms: true }), 'parse_xml_data_v2');
+  // camelCase の先頭語は頭字語でも小文字
+  assert.equal(joinWords(splitWords('URLParser'), 'camel', { keepAcronyms: true }), 'urlParser');
+
+  // --- 形式の推定 ---
+  assert.equal(detectCase('userName'), 'camel');
+  assert.equal(detectCase('UserName'), 'pascal');
+  assert.equal(detectCase('user_name'), 'snake');
+  assert.equal(detectCase('USER_NAME'), 'constant');
+  assert.equal(detectCase('user-name'), 'kebab');
+  assert.equal(detectCase('User-Name'), 'train');
+  assert.equal(detectCase('user.name'), 'dot');
+  assert.equal(detectCase('User Name'), 'title');
+  assert.equal(detectCase('User name'), 'sentence');
+  assert.equal(detectCase('XMLHttpRequest'), 'pascal'); // 頭字語を残した書き方も同じ形式とみなす
+  assert.equal(detectCase('mixed_Case-thing'), 'mixed');
+  assert.equal(detectCase('user'), 'ambiguous'); // 1語では区別がつかない
+  assert.equal(detectCase(''), 'empty');
+
+  // --- 一括変換（改行と前後の空白を保つ） ---
+  const lines = caseConvert({ text: 'first_name\r\n  last_name  \r\n\r\nEMAIL-ADDRESS', format: 'camel' });
+  assert.equal(lines.text, 'firstName\r\n  lastName  \r\n\r\nemailAddress');
+  assert.equal(lines.stats.items, 3);
+  assert.equal(lines.stats.changed, 3);
+
+  // CSVヘッダー: 区切り記号と前後の空白はそのまま、中身だけ変える
+  const csv = caseConvert({ text: 'First Name, Last Name , E-Mail', format: 'snake', scope: 'items' });
+  assert.equal(csv.text, 'first_name, last_name , e_mail');
+  const tsv = caseConvert({ text: 'First Name\tLast Name', format: 'kebab', scope: 'items' });
+  assert.equal(tsv.text, 'first-name\tlast-name'); // タブがあればタブで割る
+  assert.equal(caseConvert({ text: 'hello world\nfoo', format: 'pascal', scope: 'whole' }).text, 'HelloWorldFoo');
+
+  // 記号だけの行・空行は触らない
+  assert.equal(caseConvert({ text: 'a_b\n---\n\nc_d', format: 'camel' }).text, 'aB\n---\n\ncD');
+
+  // --- 指摘事項 ---
+  const codes = (r) => r.notes.map((n) => n.code);
+  assert.deepEqual(codes(caseConvert({ text: 'first name\nfirst_name', format: 'snake' })), ['DUPLICATE']);
+  assert.ok(codes(caseConvert({ text: '2FactorAuth', format: 'snake' })).includes('LEADING_DIGIT'));
+  assert.ok(codes(caseConvert({ text: '受注_日付', format: 'snake' })).includes('CASELESS'));
+  assert.ok(codes(caseConvert({ text: 'user ID', format: 'camel' })).includes('ACRONYM'));
+  assert.ok(codes(caseConvert({ text: 'user_name', format: 'snake' })).includes('UNCHANGED'));
+  assert.deepEqual(codes(caseConvert({ text: '   ', format: 'camel' })), ['NOTHING']);
+
+  // --- MCPラッパー ---
+  const r = await caseConvertTool({ text: 'user_name\nLAST-NAME', format: 'camel' });
+  assert.equal(r.text, 'userName\nlastName');
+  assert.equal(r.format_name, 'camelCase');
+  assert.equal(r.items.length, 2);
+  assert.equal(r.items[0].detected, 'snake');
+  assert.deepEqual(r.source, { type: 'text' });
+  assert.match(r.notes[0].message, /頭字語|大文字/);
+  assert.match((await caseConvertTool({ text: 'user ID', lang: 'en' })).notes[0].message, /acronym|capitals/i);
+
+  // allFormats は全形式を展開する
+  const all = await caseConvertTool({ text: 'XMLHttpRequest', scope: 'whole', allFormats: true });
+  assert.equal(all.items[0].all.snake, 'xml_http_request');
+  assert.equal(all.items[0].all.constant, 'XML_HTTP_REQUEST');
+  assert.equal(Object.keys(all.items[0].all).length, CASE_FORMATS.length);
+  assert.equal((await caseConvertTool({ text: 'a_b' })).items[0].all, undefined);
+
+  // listFormats は変換せず一覧だけ返す
+  const list = await caseConvertTool({ listFormats: true });
+  assert.equal(list.count, CASE_FORMATS.length);
+  assert.equal(list.formats[0].id, 'camel');
+  assert.equal(list.formats[0].example, 'userName');
+  assert.match(list.formats[0].used_for, /JavaScript/);
+  assert.match((await caseConvertTool({ listFormats: true, lang: 'en' })).formats[2].used_for, /Python/);
+
+  // 件数が多いときは items だけ切り詰め、text は全件変換する
+  const many = await caseConvertTool({ text: Array.from({ length: 260 }, (_, i) => `col_${i}`).join('\n') });
+  assert.equal(many.items.length, 200);
+  assert.equal(many.stats.items, 260);
+  assert.equal(many.text.split('\n').length, 260);
+  assert.ok(many.notes.some((n) => n.code === 'TRUNCATED'));
+
+  // 不正な引数は投げる（画面側と違い、黙って既定値へ落とさない）
+  await assert.rejects(() => caseConvertTool({ text: 'a', format: 'CamelCase' }), /format/);
+  await assert.rejects(() => caseConvertTool({ text: 'a', scope: 'cells' }), /scope/);
+  await assert.rejects(() => caseConvertTool({ text: 'a', lang: 'fr' }), /lang/);
+  await assert.rejects(() => caseConvertTool({}), /text か path/);
+  await assert.rejects(() => caseConvertTool({ text: 'a', path: '/tmp/x' }), /text か path/);
+
+  // path で読んで outputPath へ書き出す
+  const { readFile, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const src = join(tmpdir(), `firstch-case-in-${process.pid}.csv`);
+  const dst = join(tmpdir(), `firstch-case-out-${process.pid}.csv`);
+  await writeFile(src, 'First Name,Last Name\n', 'utf8');
+  const written = await caseConvertTool({ path: src, format: 'snake', scope: 'items', outputPath: dst });
+  assert.equal(written.output, dst);
+  assert.equal(written.text, undefined);
+  assert.equal(written.source.name, `firstch-case-in-${process.pid}.csv`);
+  assert.equal(await readFile(dst, 'utf8'), 'first_name,last_name\n');
+  await rm(src, { force: true });
+  await rm(dst, { force: true });
 }
 
 

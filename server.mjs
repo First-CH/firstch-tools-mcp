@@ -28,6 +28,7 @@ import { sqlFormatTool } from './sql-format.mjs';
 import { qrGenerateTool } from './qr.mjs';
 import { unixtimeConvert } from './unixtime.mjs';
 import { robotsTxtGenerate } from './robots-txt.mjs';
+import { caseConvertTool } from './case-convert.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -1192,6 +1193,51 @@ server.registerTool(
   async (opts) => {
     await logUsage('robotstxt_generate');
     return asText(await robotsTxtGenerate(opts));
+  },
+);
+
+server.registerTool(
+  'case_convert',
+  {
+    title: '文字列のケース変換（camelCase / snake_case / kebab-case）',
+    description:
+      '識別子を camelCase / PascalCase / snake_case / CONSTANT_CASE / kebab-case と、Train-Case・dot.case・' +
+      'Title Case・Sentence case・lower case・UPPER CASE を合わせた11形式へ相互変換する' +
+      '（tools.first-ch.com/case/ と同一ロジック）。変数名の一括リネーム、DBの列名とAPIのJSONキーの読み替え、' +
+      'CSVヘッダーの整形といった定型処理に使う。' +
+      'scope で処理の単位を選ぶ: lines（既定＝1行1件） / items（行内のカンマ・タブ区切りで1件ずつ＝CSVヘッダー） / whole（全体で1件）。' +
+      '**前後の空白・インデント・改行コード（LF/CRLF）・区切り記号はそのまま残す**ので、表の列やコードの並びを崩さずに名前だけ置き換わる。' +
+      '語の分かち書きは、大文字の連なりの直後に「大文字＋小文字」が続くときだけ手前で切る（XMLHttpRequest → XML / Http / Request）。' +
+      '数字は既定で直前の語に付ける（sha256Hash → sha256 / Hash。splitDigits=true で sha / 256 / Hash）。' +
+      '頭字語は既定で畳んで parseXmlData にし、keepAcronyms=true なら parseXMLData のまま残す' +
+      '（camelCase の先頭語はどちらでも小文字＝URLParser → urlParser）。' +
+      '大文字小文字を持たない文字（日本語など）はそのまま出力し、ローマ字化はしない。' +
+      '**変換後に同じ名前へ衝突する項目**（first name と first_name はどちらも first_name）・数字で始まって識別子にできない結果・' +
+      '頭字語を含む項目・入力の形式の推定を notes と stats で返す。' +
+      'allFormats=true で各項目を全形式へ展開、listFormats=true で変換せず形式の一覧と使いどころだけを返す。' +
+      'outputPath を渡すとそのパスへ書き出す。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      text: z.string().optional().describe('変換するテキスト（path と排他。複数行可）'),
+      path: z.string().optional().describe('変換するファイルの絶対パス（UTF-8として読む。text と排他）'),
+      outputPath: z.string().optional().describe('結果を書き出す絶対パス（指定すると本文は返さない）'),
+      format: z
+        .enum(['camel', 'pascal', 'snake', 'constant', 'kebab', 'train', 'dot', 'title', 'sentence', 'lower', 'upper'])
+        .optional()
+        .describe("変換先の形式（既定 'camel'）"),
+      scope: z
+        .enum(['lines', 'items', 'whole'])
+        .optional()
+        .describe("処理の単位（既定 'lines'＝1行1件 / 'items'＝行内のカンマ・タブ区切り / 'whole'＝全体で1件）"),
+      splitDigits: z.boolean().optional().describe('数字の前で語を区切る（既定 false＝sha256 は1語）'),
+      keepAcronyms: z.boolean().optional().describe('頭字語を大文字のまま残す（既定 false＝Id / Url / Xml へ畳む）'),
+      allFormats: z.boolean().optional().describe('各項目を11形式すべてへ展開して返す（先頭20件まで）'),
+      listFormats: z.boolean().optional().describe('変換せず、形式の一覧（名前・例・使いどころ）だけを返す'),
+      lang: z.enum(['ja', 'en']).optional().describe("指摘事項の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('case_convert');
+    return asText(await caseConvertTool(opts));
   },
 );
 

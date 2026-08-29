@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 27 registered tools, and `tools/call` actually executes handlers
+// returns all 28 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -35,7 +35,7 @@ child.stdout.on('data', (chunk) => {
 
 function request(method, params, id) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timeout waiting for ${method}`)), 15000);
+    const timer = setTimeout(() => reject(new Error(`timeout waiting for ${method} (id ${id})`)), 15000);
     pending.set(id, (msg) => {
       clearTimeout(timer);
       resolve(msg);
@@ -60,6 +60,7 @@ try {
   const expected = [
     'aspect_ratio_calc',
     'base64_encode',
+    'case_convert',
     'color_convert',
     'contrast_check',
     'count_chars',
@@ -505,6 +506,27 @@ try {
 
   const rtErr = await request('tools/call', { name: 'robotstxt_generate', arguments: { ai: { preset: 'sometimes' } } }, 63);
   assert.ok(rtErr.result?.isError, `robotstxt_generate should reject an unknown preset: ${JSON.stringify(rtErr)}`);
+
+  // case_convert: 行ごとの一括変換とCSVヘッダー（区切りを保つ）
+  const ccRes = await callTool('case_convert', { text: 'user_name\nLAST-NAME\nXMLHttpRequest', format: 'camel' }, 64);
+  assert.equal(ccRes.text, 'userName\nlastName\nxmlHttpRequest',
+    `case_convert camelCase mismatch: ${JSON.stringify(ccRes.text)}`);
+  assert.equal(ccRes.items?.[0]?.detected, 'snake',
+    `case_convert should detect snake_case: ${JSON.stringify(ccRes.items?.[0])}`);
+
+  const ccCsv = await callTool('case_convert', { text: 'First Name, Last Name', format: 'snake', scope: 'items' }, 65);
+  assert.equal(ccCsv.text, 'first_name, last_name',
+    `case_convert should keep the separators: ${JSON.stringify(ccCsv.text)}`);
+
+  const ccAll = await callTool('case_convert', { text: 'XMLHttpRequest', scope: 'whole', allFormats: true }, 66);
+  assert.equal(ccAll.items?.[0]?.all?.constant, 'XML_HTTP_REQUEST',
+    `case_convert allFormats mismatch: ${JSON.stringify(ccAll.items?.[0]?.all)}`);
+
+  const ccList = await callTool('case_convert', { listFormats: true }, 67);
+  assert.equal(ccList.count, 11, `case_convert format count mismatch: ${JSON.stringify(ccList.count)}`);
+
+  const ccErr = await request('tools/call', { name: 'case_convert', arguments: { text: 'a', format: 'CamelCase' } }, 68);
+  assert.ok(ccErr.result?.isError, `case_convert should reject an unknown format: ${JSON.stringify(ccErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();
