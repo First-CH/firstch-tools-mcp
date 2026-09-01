@@ -4,7 +4,7 @@
 // returns all 28 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -65,6 +65,7 @@ try {
     'contrast_check',
     'count_chars',
     'cron_explain',
+    'csv_convert',
     'diff_check',
     'encoding_convert',
     'hash_generate',
@@ -527,6 +528,33 @@ try {
 
   const ccErr = await request('tools/call', { name: 'case_convert', arguments: { text: 'a', format: 'CamelCase' } }, 68);
   assert.ok(ccErr.result?.isError, `case_convert should reject an unknown format: ${JSON.stringify(ccErr)}`);
+
+  // csv_convert: 両方向・入れ子・向きの推定・構文エラーの位置
+  const cjRes = await callTool('csv_convert', { text: 'id,name\n1,Ada\n2,Bob\n' }, 69);
+  assert.equal(cjRes.direction, 'csv2json', `csv_convert should guess csv2json: ${JSON.stringify(cjRes.direction)}`);
+  assert.deepEqual(JSON.parse(cjRes.output || 'null'), [{ id: 1, name: 'Ada' }, { id: 2, name: 'Bob' }],
+    `csv_convert csv2json mismatch: ${JSON.stringify(cjRes.output)}`);
+
+  const cjBack = await callTool('csv_convert', { text: '[{"id":1,"stock":{"qty":5}}]' }, 70);
+  assert.equal(cjBack.direction, 'json2csv', `csv_convert should guess json2csv: ${JSON.stringify(cjBack.direction)}`);
+  assert.equal(cjBack.output, 'id,stock.qty\n1,5\n',
+    `csv_convert json2csv mismatch: ${JSON.stringify(cjBack.output)}`);
+
+  // 先頭0や2^53超のIDは文字列のまま（桁が落ちない）
+  const cjKeep = await callTool('csv_convert', { text: 'zip,id\n0123,12345678901234567890\n' }, 71);
+  assert.deepEqual(JSON.parse(cjKeep.output || 'null'), [{ zip: '0123', id: '12345678901234567890' }],
+    `csv_convert should keep unrepresentable numbers as text: ${JSON.stringify(cjKeep.output)}`);
+
+  const cjTab = await callTool('csv_convert', { text: 'a\tb\n1\t2\n' }, 72);
+  assert.equal(cjTab.delimiter, 'tab', `csv_convert should detect the tab: ${JSON.stringify(cjTab.delimiter)}`);
+
+  // 壊れたJSONは例外ではなく ok:false ＋ 行・桁で返る
+  const cjBad = await callTool('csv_convert', { text: '[{"a":1,}]' }, 73);
+  assert.equal(cjBad.ok, false, `csv_convert should report a syntax error: ${JSON.stringify(cjBad)}`);
+  assert.equal(cjBad.error?.line, 1, `csv_convert error line mismatch: ${JSON.stringify(cjBad.error)}`);
+
+  const cjErr = await request('tools/call', { name: 'csv_convert', arguments: { text: 'a', delimiter: 'colon' } }, 74);
+  assert.ok(cjErr.result?.isError, `csv_convert should reject an unknown delimiter: ${JSON.stringify(cjErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

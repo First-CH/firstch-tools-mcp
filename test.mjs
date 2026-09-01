@@ -52,6 +52,10 @@ import { qrGenerateTool, qrEncode, qrMatrixToSvg, qrMatrixToText, QrError } from
 import { unixtimeConvert, UnixTimeError } from './unixtime.mjs';
 import { robotsTxtGenerate, listAiCrawlers, buildRobotsTxt, AI_CRAWLERS } from './robots-txt.mjs';
 import { caseConvertTool, caseConvert, splitWords, joinWords, detectCase, CASE_FORMATS } from './case-convert.mjs';
+import {
+  csvConvertTool, csvJsonConvert, csvToJson, csvFromJson, csvParseDelimited, csvParseJson,
+  csvDetectDelimiter, csvGuessDirection, csvInferValue, csvParsePath, CsvConvertError,
+} from './csv-json.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -3124,5 +3128,184 @@ assert.equal(over.x_postable, false);
   await rm(dst, { force: true });
 }
 
+
+// ==================== csv_convert ====================
+{
+  const codes = (r) => (r.notes || []).map((n) => n.code);
+  const toJson = (text, o) => csvToJson(text, { header: true, nest: true, types: true, trim: true, ...o });
+  const toCsv = (text, o) => csvFromJson(text, { header: true, nest: true, ...o });
+
+  // --- RFC 4180 の読み取り ---
+  assert.deepEqual(csvParseDelimited('a,b\n1,2\n', ',').rows, [['a', 'b'], ['1', '2']]);
+  // 引用符の中の区切り・改行・"" は文字として読む
+  assert.deepEqual(csvParseDelimited('a,"b,c"\n', ',').rows, [['a', 'b,c']]);
+  assert.deepEqual(csvParseDelimited('a,"line\nbreak"\n', ',').rows, [['a', 'line\nbreak']]);
+  assert.deepEqual(csvParseDelimited('a,"say ""hi"""\n', ',').rows, [['a', 'say "hi"']]);
+  assert.deepEqual(csvParseDelimited('a,b\r\n1,2\r\n', ',').rows, [['a', 'b'], ['1', '2']]);
+  // 閉じられていない引用符は、その開始位置を指して返す
+  assert.equal(csvParseDelimited('a,"b\n', ',').error.code, 'UNCLOSED_QUOTE');
+  assert.equal(csvParseDelimited('a,"b\n', ',').error.line, 1);
+
+  // --- 区切り文字の自動判定（各行に同じ個数で並ぶ記号を選ぶ） ---
+  assert.equal(csvDetectDelimiter('a,b,c\n1,2,3\n'), 'comma');
+  assert.equal(csvDetectDelimiter('a\tb\tc\n1\t2\t3\n'), 'tab');
+  assert.equal(csvDetectDelimiter('a;b;c\n1;2;3\n'), 'semicolon');
+  assert.equal(csvDetectDelimiter('a|b|c\n1|2|3\n'), 'pipe');
+  // 本文にたまたま混ざったカンマでタブを取り違えない
+  assert.equal(csvDetectDelimiter('name\tnote\nfoo\ta, b, c\nbar\td, e, f\n'), 'tab');
+
+  // --- 型の読み替えは「文字列へ戻して元通りか」で決める ---
+  const inf = (s) => csvInferValue(s, { trim: true, types: true });
+  assert.equal(inf('42'), 42);
+  assert.equal(inf('-1.5'), -1.5);
+  assert.equal(inf('true'), true);
+  assert.equal(inf('null'), null);
+  // 復元できない表記は文字列のまま（郵便番号・電話番号・伝票番号が壊れない）
+  assert.equal(inf('0123'), '0123');
+  assert.equal(inf('+1'), '+1');
+  assert.equal(inf('1.50'), '1.50');
+  assert.equal(inf('12345678901234567890'), '12345678901234567890');
+  assert.equal(inf('090-1234-5678'), '090-1234-5678');
+  assert.equal(csvInferValue('42', { trim: true, types: false }), '42');
+  assert.equal(csvInferValue('', { trim: true, types: true, emptyNull: true }), null);
+
+  // --- 列名 → 経路 ---
+  assert.deepEqual(csvParsePath('a.b'), ['a', 'b']);
+  assert.deepEqual(csvParsePath('tags[0]'), ['tags', 0]);
+  assert.deepEqual(csvParsePath('tags.0'), ['tags', 0]);
+
+  // --- CSV → JSON ---
+  const r1 = toJson('id,name\n1,Ada\n2,Bob\n');
+  assert.deepEqual(r1.json, [{ id: 1, name: 'Ada' }, { id: 2, name: 'Bob' }]);
+  assert.deepEqual(r1.columns, ['id', 'name']);
+  assert.equal(r1.stats.rows, 2);
+  // a.b 列は入れ子・tags.0 は配列
+  assert.deepEqual(toJson('id,stock.qty,tags.0,tags.1\n1,5,x,y\n').json,
+    [{ id: 1, stock: { qty: 5 }, tags: ['x', 'y'] }]);
+  // 入れ子を切ると平らなキーのまま
+  assert.deepEqual(toJson('stock.qty\n5\n', { nest: false }).json, [{ 'stock.qty': 5 }]);
+  // 見出しなしなら各行は配列
+  assert.deepEqual(toJson('1,2\n3,4\n', { header: false }).json, [[1, 2], [3, 4]]);
+  // BOM・CRLF は読めて、指摘として残る
+  const r2 = toJson('﻿a,b\r\n1,2\r\n');
+  assert.deepEqual(r2.json, [{ a: 1, b: 2 }]);
+  assert.ok(codes(r2).includes('BOM') && codes(r2).includes('CRLF'));
+  // 列数の不揃い・重複した列名・空の見出しを指摘する
+  assert.ok(codes(toJson('a,b\n1\n')).includes('RAGGED'));
+  const dup = toJson('name,name\n1,2\n');
+  assert.ok(codes(dup).includes('DUP_HEADER'));
+  assert.deepEqual(dup.columns, ['name', 'name_2']);
+  assert.deepEqual(toJson('a,\n1,2\n').columns, ['a', 'column2']);
+  // 桁落ちする値・数式として実行されうるセル
+  assert.ok(codes(toJson('id\n12345678901234567890\n')).includes('BIG_NUMBER'));
+  assert.ok(codes(toJson('f\n=1+1\n')).includes('FORMULA'));
+  // 見出しだけならデータは0件
+  assert.deepEqual(toJson('a,b\n').json, []);
+
+  // --- JSON → CSV ---
+  assert.equal(toCsv('[{"id":1,"name":"Ada"}]').output, 'id,name\n1,Ada\n');
+  // 区切り・引用・改行コード・BOM
+  assert.equal(toCsv('[{"a":"x,y"}]').output, 'a\n"x,y"\n');
+  assert.equal(toCsv('[{"a":1}]', { delimiter: 'tab' }).output, 'a\n1\n');
+  assert.equal(toCsv('[{"a":1,"b":2}]', { delimiter: 'tab' }).output, 'a\tb\n1\t2\n');
+  assert.equal(toCsv('[{"a":1}]', { newline: 'crlf' }).output, 'a\r\n1\r\n');
+  assert.equal(toCsv('[{"a":1}]', { quoteAll: true }).output, '"a"\n"1"\n');
+  assert.equal(toCsv('[{"a":1}]', { bom: true }).output.charCodeAt(0), 0xfeff);
+  assert.equal(toCsv('[{"a":1}]', { header: false }).output, '1\n');
+  // 入れ子は a.b 列へ割る。切れば1セルにJSON文字列で入る
+  assert.equal(toCsv('[{"stock":{"qty":5}}]').output, 'stock.qty\n5\n');
+  assert.ok(codes(toCsv('[{"stock":{"qty":5}}]', { nest: false })).includes('STRINGIFIED'));
+  // 単体のオブジェクト・配列を包んだもの・JSON Lines
+  assert.ok(codes(toCsv('{"a":1}')).includes('NOT_ARRAY'));
+  assert.equal(toCsv('{"data":[{"a":1},{"a":2}]}').output, 'a\n1\n2\n');
+  assert.ok(codes(toCsv('{"data":[{"a":1}]}')).includes('UNWRAPPED'));
+  assert.equal(toCsv('{"a":1}\n{"a":2}\n').output, 'a\n1\n2\n');
+  assert.ok(codes(toCsv('{"a":1}\n{"a":2}\n')).includes('JSONL'));
+  // キーの並びが揃わないときは全体で列を揃え、無い項目は空にする
+  const mixed = toCsv('[{"a":1},{"b":2}]');
+  assert.equal(mixed.output, 'a,b\n1,\n,2\n');
+  assert.ok(codes(mixed).includes('MIXED_KEYS'));
+
+  // --- 往復して元へ戻る（入れ子・引用符・改行を含めて） ---
+  const src = [{ id: 1, name: 'Ada, "A"', stock: { qty: 5 }, tags: ['x', 'y'], note: 'line\nbreak' }];
+  const csv = toCsv(JSON.stringify(src)).output;
+  assert.deepEqual(toJson(csv).json, src);
+
+  // --- JSONの構文エラーは行・桁を指す ---
+  const bad = csvParseJson('[{"a":1,}]');
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error.code, 'EXPECTED_KEY');
+  assert.equal(bad.error.line, 1);
+  assert.equal(csvParseJson('[1,2').error.code, 'UNEXPECTED_END');
+  assert.equal(csvParseJson('{"a":1} x').error.code, 'TRAILING_TEXT');
+  assert.equal(csvParseJson("['a']").error.code, 'UNEXPECTED_CHAR');
+  assert.ok(csvParseJson('[{"a":1}]').ok);
+
+  // --- 向きの推定 ---
+  assert.equal(csvGuessDirection('[{"a":1}]'), 'json2csv');
+  assert.equal(csvGuessDirection('{"a":1}'), 'json2csv');
+  assert.equal(csvGuessDirection('a,b\n1,2\n'), 'csv2json');
+  assert.equal(csvGuessDirection('﻿  [1]'), 'json2csv');
+
+  // --- csvJsonConvert（site版と共有する入口） ---
+  const conv = csvJsonConvert({ direction: 'csv2json', text: 'a,b\n1,2\n' });
+  assert.equal(conv.direction, 'csv2json');
+  assert.equal(conv.settings.header, true);
+  assert.ok(conv.input_bytes > 0 && conv.output_bytes > 0);
+  assert.equal(csvJsonConvert({ direction: 'csv2json', text: '   ' }).empty, true);
+
+  // --- MCPラッパー ---
+  const t1 = await csvConvertTool({ text: 'id,name\n1,Ada\n' });
+  assert.equal(t1.ok, true);
+  assert.equal(t1.direction, 'csv2json');
+  assert.equal(t1.direction_guessed, true);
+  assert.deepEqual(JSON.parse(t1.output), [{ id: 1, name: 'Ada' }]);
+  assert.deepEqual(t1.source, { type: 'text' });
+  assert.deepEqual(t1.columns, ['id', 'name']);
+
+  const t2 = await csvConvertTool({ text: '[{"id":1,"name":"Ada"}]' });
+  assert.equal(t2.direction, 'json2csv');
+  assert.equal(t2.output, 'id,name\n1,Ada\n');
+  // direction を明示すれば推定しない（JSONに見えるCSVを取り違えない）
+  assert.equal((await csvConvertTool({ text: 'a,b\n1,2\n', direction: 'csv2json' })).direction_guessed, false);
+
+  // 指摘の文言は lang で切り替わる
+  assert.match((await csvConvertTool({ text: 'a,b\n1\n' })).notes.find((n) => n.code === 'RAGGED').message, /列数/);
+  assert.match((await csvConvertTool({ text: 'a,b\n1\n', lang: 'en' })).notes.find((n) => n.code === 'RAGGED').message, /columns/);
+
+  // 壊れた入力は例外ではなく ok:false の結果として返す（行・桁・抜粋がそのまま直しどころになる）
+  const err = await csvConvertTool({ text: '[{"a":1,}]' });
+  assert.equal(err.ok, false);
+  assert.equal(err.error.code, 'EXPECTED_KEY');
+  assert.equal(err.error.line, 1);
+  assert.match(err.error.message, /キー/);
+  assert.ok(err.excerpt);
+  assert.match((await csvConvertTool({ text: '[{"a":1,}]', lang: 'en' })).error.message, /key/i);
+
+  // 不正な引数は投げる（画面側と違い、黙って既定値へ落とさない）
+  await assert.rejects(() => csvConvertTool({ text: 'a', lang: 'fr' }), /lang/);
+  await assert.rejects(() => csvConvertTool({ text: 'a', delimiter: 'colon' }), /delimiter/);
+  await assert.rejects(() => csvConvertTool({ text: 'a', direction: 'both' }), /direction/);
+  await assert.rejects(() => csvConvertTool({ text: 'a', indent: 9 }), /indent/);
+  await assert.rejects(() => csvConvertTool({ text: 'a', newline: 'cr' }), /newline/);
+  await assert.rejects(() => csvConvertTool({}), /text か path/);
+  await assert.rejects(() => csvConvertTool({ text: 'a', path: '/tmp/x' }), /text か path/);
+  assert.ok(new CsvConvertError('x') instanceof Error);
+
+  // path で読んで outputPath へ書き出す
+  const { readFile, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const inPath = join(tmpdir(), `firstch-csv-in-${process.pid}.csv`);
+  const outPath = join(tmpdir(), `firstch-csv-out-${process.pid}.json`);
+  await writeFile(inPath, 'id,name\n1,Ada\n', 'utf8');
+  const written = await csvConvertTool({ path: inPath, outputPath: outPath });
+  assert.equal(written.output_path, outPath);
+  assert.equal(written.output, undefined);
+  assert.equal(written.source.name, `firstch-csv-in-${process.pid}.csv`);
+  assert.deepEqual(JSON.parse(await readFile(outPath, 'utf8')), [{ id: 1, name: 'Ada' }]);
+  await rm(inPath, { force: true });
+  await rm(outPath, { force: true });
+}
 
 console.log('all tests passed');

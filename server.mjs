@@ -29,6 +29,7 @@ import { qrGenerateTool } from './qr.mjs';
 import { unixtimeConvert } from './unixtime.mjs';
 import { robotsTxtGenerate } from './robots-txt.mjs';
 import { caseConvertTool } from './case-convert.mjs';
+import { csvConvertTool } from './csv-json.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -1238,6 +1239,55 @@ server.registerTool(
   async (opts) => {
     await logUsage('case_convert');
     return asText(await caseConvertTool(opts));
+  },
+);
+
+server.registerTool(
+  'csv_convert',
+  {
+    title: 'CSV/TSV ⇄ JSON の相互変換',
+    description:
+      'CSV/TSVとJSON配列を相互変換する（tools.first-ch.com/csv-json/ と同一ロジック）。' +
+      '表計算ソフトから書き出した表をAPIに渡せるJSONにする、逆にAPIの応答をExcelで開ける表にする、といった用途に使う。' +
+      'direction を省くと入力の先頭が [ か { なら json2csv、そうでなければ csv2json と推定する。' +
+      '区切り文字は先頭20行で「どの記号が各行に同じ個数だけ現れるか」を見て自動判定し、delimiter で固定もできる。' +
+      '**stock.qty のような列名は入れ子のオブジェクトとして読み書きし、tags.0 / tags.1（tags[0] も同義）は配列になる**。' +
+      '逆向きも同じ規則で平らにするので、CSVへ出してJSONへ戻すと元の構造に復元される（nest=false なら入れ子はJSONの文字列としてセル1つに入る）。' +
+      '**型の読み替えは「一度数値にして文字列へ戻したとき元の表記と1文字も違わないか」で決める**ため、' +
+      '0123・+1・1.50・2の53乗を超えるID（12345678901234567890）は文字列のまま残り、郵便番号・電話番号・伝票番号・バージョン番号が壊れない。' +
+      '読み取りは RFC 4180 準拠で、引用符・"" エスケープ・セル内改行・CRLF・BOM に対応する（書き出し側は bom / newline を選べる）。' +
+      'JSONは配列・単体のオブジェクト・{"data":[…]} のように配列を包んだもの・1行1件のJSON Lines を受け取れる。' +
+      '**JSONの構文エラーは行・桁と前後の抜粋を返す**（例外にせず ok:false の結果として返すので、そのまま直しどころになる）。' +
+      'あわせて、列数が見出しと合わない行・重複した列名（name_2 として残す）・空の見出し（column4 を割り当てる）・桁落ちする数値・' +
+      '= + - @ で始まり表計算ソフトが数式として実行しうるセル（CSVインジェクション）・キーの並びが揃わないオブジェクトを notes で指摘する。' +
+      'outputPath を渡すとそのパスへ書き出す（本文は返さない）。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      text: z.string().optional().describe('変換する入力（CSV/TSV か JSON。path と排他）'),
+      path: z.string().optional().describe('変換するファイルの絶対パス（UTF-8として読む。text と排他）'),
+      outputPath: z.string().optional().describe('結果を書き出す絶対パス（指定すると本文は返さない）'),
+      direction: z
+        .enum(['auto', 'csv2json', 'json2csv'])
+        .optional()
+        .describe("変換の向き（既定 'auto'＝入力の先頭が [ か { なら json2csv）"),
+      delimiter: z
+        .enum(['auto', 'comma', 'tab', 'semicolon', 'pipe'])
+        .optional()
+        .describe("区切り文字（既定 'auto'。json2csv では auto はカンマ）"),
+      header: z.boolean().optional().describe('1行目を見出しとして扱う／書き出す（既定 true。false なら各行は配列になる）'),
+      nest: z.boolean().optional().describe('a.b 列 ⇄ 入れ子オブジェクトを相互展開する（既定 true）'),
+      types: z.boolean().optional().describe('数値・true/false/null を読み替える（既定 true・csv2json のみ）'),
+      trim: z.boolean().optional().describe('セル前後の空白を落とす（既定 true・csv2json のみ）'),
+      emptyNull: z.boolean().optional().describe('空のセルを null にする（既定 false＝空文字列・csv2json のみ）'),
+      indent: z.union([z.number().int().min(0).max(8), z.literal('tab')]).optional().describe('JSONのインデント（既定 2・csv2json のみ）'),
+      newline: z.enum(['lf', 'crlf']).optional().describe("改行コード（既定 'lf'・json2csv のみ）"),
+      quoteAll: z.boolean().optional().describe('すべてのセルを引用符で囲む（既定 false・json2csv のみ）'),
+      bom: z.boolean().optional().describe('先頭にBOMを付ける（既定 false。ExcelでUTF-8のCSVを開くとき・json2csv のみ）'),
+      lang: z.enum(['ja', 'en']).optional().describe("指摘事項とエラーの言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('csv_convert');
+    return asText(await csvConvertTool(opts));
   },
 );
 

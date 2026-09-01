@@ -1,7 +1,7 @@
 {
   "name": "@first-ch/tools-mcp",
-  "version": "0.26.0",
-  "description": "First CH Tools の計算ロジック（WCAGコントラスト比・文字数/Xウェイト・WebP変換・JSON-LD生成・llms.txt生成・文字コード/改行コード変換・Marp Markdown→スライド レンダリング・テストデータ生成・テキスト/コード差分・Cron式の解説・Base64/Data URI変換・URLパラメータの分解/再構築・HTML特殊文字のエスケープ/エンティティのデコード・JSON⇄YAMLの相互変換・px⇄rem/emの単位換算とCSSの一括変換・カラーコードの相互変換とアルファ透過の合成・MD5/SHA-1/SHA-256/SHA-384/SHA-512のハッシュ生成と照合・JWTのデコードと有効期限/署名の検証・User-Agent文字列の解析とデバイス判定・UUID v4/ULIDの一括生成・アスペクト比の計算とレスポンシブサイズの算出・TSV/CSVからMarkdownテーブルへの整形と相互変換・SQLクエリの整形と予約語の大文字化・URL/テキストからのQRコード生成・UNIXタイムスタンプと日時表記の相互変換・robots.txtの生成（AIクローラーの許可プリセット付き）・文字列のケース変換（camelCase/snake_case/kebab-case など11形式））をMCPツールとして提供するサーバー",
+  "version": "0.27.0",
+  "description": "First CH Tools の計算ロジック（WCAGコントラスト比・文字数/Xウェイト・WebP変換・JSON-LD生成・llms.txt生成・文字コード/改行コード変換・Marp Markdown→スライド レンダリング・テストデータ生成・テキスト/コード差分・Cron式の解説・Base64/Data URI変換・URLパラメータの分解/再構築・HTML特殊文字のエスケープ/エンティティのデコード・JSON⇄YAMLの相互変換・px⇄rem/emの単位換算とCSSの一括変換・カラーコードの相互変換とアルファ透過の合成・MD5/SHA-1/SHA-256/SHA-384/SHA-512のハッシュ生成と照合・JWTのデコードと有効期限/署名の検証・User-Agent文字列の解析とデバイス判定・UUID v4/ULIDの一括生成・アスペクト比の計算とレスポンシブサイズの算出・TSV/CSVからMarkdownテーブルへの整形と相互変換・SQLクエリの整形と予約語の大文字化・URL/テキストからのQRコード生成・UNIXタイムスタンプと日時表記の相互変換・robots.txtの生成（AIクローラーの許可プリセット付き）・文字列のケース変換（camelCase/snake_case/kebab-case など11形式）・CSV/TSVとJSON配列の相互変換（区切りの自動判定・a.b 列と入れ子の相互展開））をMCPツールとして提供するサーバー",
   "type": "module",
   "bin": {
     "firstch-tools-mcp": "server.mjs"
@@ -191,6 +191,7 @@
     "unixtime.mjs",
     "robots-txt.mjs",
     "case-convert.mjs",
+    "csv-json.mjs",
     "vendor/",
     "README.md",
     "LICENSE"
