@@ -29,6 +29,7 @@ import { qrGenerateTool } from './qr.mjs';
 import { unixtimeConvert } from './unixtime.mjs';
 import { robotsTxtGenerate } from './robots-txt.mjs';
 import { caseConvertTool } from './case-convert.mjs';
+import { zenkakuConvertTool } from './zenkaku.mjs';
 import { csvConvertTool } from './csv-json.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
@@ -1288,6 +1289,58 @@ server.registerTool(
   async (opts) => {
     await logUsage('csv_convert');
     return asText(await csvConvertTool(opts));
+  },
+);
+
+server.registerTool(
+  'zenkaku_convert',
+  {
+    title: '全角⇄半角の変換とテキストの掃除',
+    description:
+      '英数字・カタカナ・記号・スペースを**文字種ごとに**全角⇄半角へ変換し、あわせて空白まわりを掃除する' +
+      '（tools.first-ch.com/zenkaku/ と同一ロジック）。顧客支給原稿の表記統一、CSV取り込み前の正規化、フォーム入力値の掃除に使う。' +
+      'alnum / kana / symbol / space をそれぞれ keep（そのまま）/ han（半角へ）/ zen（全角へ）で指定する。' +
+      '既定は日本語の原稿で最も多い「英数字・記号・スペースは半角、カタカナは全角」（preset="ja" と同じ）。' +
+      'preset は ja / csv（jaに空白の掃除と見えない文字の除去を足したもの）/ han（すべて半角）/ zen（すべて全角）で、個別指定が優先される。' +
+      '**半角カタカナは1文字ではない**ため、半角→全角では次が濁点なら1文字へ合成し（ｶﾞ→ガ・ﾊﾟ→パ・ｳﾞ→ヴ）、全角→半角では2文字へ分解する。' +
+      '句読点・カギ括弧・中黒・長音（｡ ､ ｢ ｣ ･ ｰ）は半角カタカナのブロック（U+FF61〜U+FF9F）に同居しているので**カタカナと同じ文字種**として扱う' +
+      '（kana="han" は「テスト」。を ｢ﾃｽﾄ｣｡ にする。句読点を全角で残したいなら kana="keep"）。' +
+      'スペースは全角スペース（U+3000）⇄半角スペースで、NBSP（U+00A0）や欧文の各種スペースも半角側へ寄せる。' +
+      '掃除は collapseSpaces（連続する空白を先頭の1文字へ）/ trimLines（行頭行末の空白）/ blankLines（keep・collapse・remove）/ ' +
+      'removeInvisible（ゼロ幅・BOM・制御文字）/ composeMarks（結合した濁点をNFCで合成）。' +
+      '**改行コード（LF/CRLF）とタブ、ひらがな・漢字は書き換えない**。' +
+      '出力に残った半角カナ・全角スペース・見えない文字・結合文字の濁点と、波ダッシュ〜(U+301C)／全角チルダ～(U+FF5E)・環境依存文字（① ㈱ Ⅲ）を notes で指摘する' +
+      '（後の2つはどちらへ寄せるべきかが届け先で変わるため、指摘のみで自動変換しない）。' +
+      '**NFKC正規化とは別物**で、①→1 や ㈱→(株) のような潰し方はせず、選んだ文字種しか触らない。' +
+      'inspect=true なら変換せず、半角カナ・全角スペース・見えない文字が入っていないかの点検だけを返す。' +
+      'outputPath を渡すとそのパスへ書き出す。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      text: z.string().optional().describe('変換するテキスト（path と排他。複数行可）'),
+      path: z.string().optional().describe('変換するファイルの絶対パス（UTF-8として読む。text と排他）'),
+      outputPath: z.string().optional().describe('結果を書き出す絶対パス（指定すると本文は返さない）'),
+      preset: z
+        .enum(['ja', 'csv', 'han', 'zen'])
+        .optional()
+        .describe("よく使う組み合わせ（ja=日本語の標準 / csv=取込前の正規化 / han=すべて半角 / zen=すべて全角。個別指定が優先）"),
+      alnum: z.enum(['keep', 'han', 'zen']).optional().describe("英数字の向き（既定 'han'）"),
+      kana: z.enum(['keep', 'han', 'zen']).optional().describe("カタカナ・句読点・カギ括弧・中黒・長音の向き（既定 'zen'）"),
+      symbol: z.enum(['keep', 'han', 'zen']).optional().describe("記号の向き（既定 'han'）"),
+      space: z.enum(['keep', 'han', 'zen']).optional().describe("スペースの向き（既定 'han'。NBSPなども対象）"),
+      collapseSpaces: z.boolean().optional().describe('連続する空白を先頭の1文字にまとめる（既定 false）'),
+      trimLines: z.boolean().optional().describe('行頭・行末の空白を削る（既定 false）'),
+      blankLines: z
+        .enum(['keep', 'collapse', 'remove'])
+        .optional()
+        .describe("空行の扱い（既定 'keep'／'collapse'=連続する空行を1つに／'remove'=すべて削除）"),
+      removeInvisible: z.boolean().optional().describe('見えない文字（ゼロ幅・BOM・制御文字）を削除する（既定 false）'),
+      composeMarks: z.boolean().optional().describe('結合した濁点・半濁点をNFCで1文字へ合成する（既定 false）'),
+      inspect: z.boolean().optional().describe('変換せず、何が入っているかの点検結果だけを返す（既定 false）'),
+      lang: z.enum(['ja', 'en']).optional().describe("指摘事項の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('zenkaku_convert');
+    return asText(await zenkakuConvertTool(opts));
   },
 );
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 28 registered tools, and `tools/call` actually executes handlers
+// returns all 30 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -87,6 +87,7 @@ try {
     'uuid_generate',
     'webp_convert',
     'yaml_to_json',
+    'zenkaku_convert',
   ];
   assert.deepEqual(names, expected, `unexpected tool list: ${JSON.stringify(names)}`);
 
@@ -555,6 +556,33 @@ try {
 
   const cjErr = await request('tools/call', { name: 'csv_convert', arguments: { text: 'a', delimiter: 'colon' } }, 74);
   assert.ok(cjErr.result?.isError, `csv_convert should reject an unknown delimiter: ${JSON.stringify(cjErr)}`);
+
+  // zenkaku_convert: 文字種ごとの向き・半角カナの合成・掃除・点検
+  const zkRes = await callTool('zenkaku_convert', { text: '株式会社ＡＢＣ　ﾃｽﾄ ﾃﾞｰﾀ\nTEL：０３－１２３４' }, 75);
+  assert.equal(zkRes.text, '株式会社ABC テスト データ\nTEL:03-1234',
+    `zenkaku_convert default mismatch: ${JSON.stringify(zkRes.text)}`);
+  assert.equal(zkRes.options?.kana, 'zen', `zenkaku_convert default kana mismatch: ${JSON.stringify(zkRes.options)}`);
+
+  // 個別指定は preset より優先される（カタカナだけ半角のまま残す）
+  const zkKeep = await callTool('zenkaku_convert', { text: 'ｱｲｳ ＡＢＣ', preset: 'ja', kana: 'keep' }, 76);
+  assert.equal(zkKeep.text, 'ｱｲｳ ABC', `zenkaku_convert per-kind override mismatch: ${JSON.stringify(zkKeep.text)}`);
+
+  // 全角カナ → 半角カナ（濁点は2文字へ分解する）
+  const zkHan = await callTool('zenkaku_convert', { text: 'ガパ「テスト」', preset: 'han' }, 77);
+  assert.equal(zkHan.text, 'ｶﾞﾊﾟ｢ﾃｽﾄ｣', `zenkaku_convert half-width katakana mismatch: ${JSON.stringify(zkHan.text)}`);
+
+  // CSV取込前のプリセット（空白の掃除と見えない文字の除去まで）
+  const zkCsv = await callTool('zenkaku_convert', { text: '  Ａ   Ｂ  \n ﾃｽﾄ\u200b \n', preset: 'csv' }, 78);
+  assert.equal(zkCsv.text, 'A B\nテスト\n', `zenkaku_convert csv preset mismatch: ${JSON.stringify(zkCsv.text)}`);
+
+  // inspect は変換せず点検だけ（本文を返さない）
+  const zkIns = await callTool('zenkaku_convert', { text: 'ﾃｽﾄ　①', inspect: true }, 79);
+  assert.equal(zkIns.text, undefined, `zenkaku_convert inspect should not return text: ${JSON.stringify(zkIns.text)}`);
+  assert.deepEqual((zkIns.notes || []).map((n) => n.code).sort(), ['HANKAKU_KANA', 'PLATFORM', 'ZEN_SPACE'],
+    `zenkaku_convert inspect notes mismatch: ${JSON.stringify(zkIns.notes)}`);
+
+  const zkErr = await request('tools/call', { name: 'zenkaku_convert', arguments: { text: 'a', alnum: 'full' } }, 80);
+  assert.ok(zkErr.result?.isError, `zenkaku_convert should reject an unknown direction: ${JSON.stringify(zkErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

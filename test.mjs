@@ -56,6 +56,10 @@ import {
   csvConvertTool, csvJsonConvert, csvToJson, csvFromJson, csvParseDelimited, csvParseJson,
   csvDetectDelimiter, csvGuessDirection, csvInferValue, csvParsePath, CsvConvertError,
 } from './csv-json.mjs';
+import {
+  zenkakuConvertTool, zenkakuConvert, convertWidth, cleanText,
+  ZK_PRESETS, ZK_TARGETS, ZK_DIRECTIONS, ZK_BLANK, KANA_HAN, KANA_ZEN, ZenkakuError,
+} from './zenkaku.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -3304,6 +3308,153 @@ assert.equal(over.x_postable, false);
   assert.equal(written.output, undefined);
   assert.equal(written.source.name, `firstch-csv-in-${process.pid}.csv`);
   assert.deepEqual(JSON.parse(await readFile(outPath, 'utf8')), [{ id: 1, name: 'Ada' }]);
+  await rm(inPath, { force: true });
+  await rm(outPath, { force: true });
+}
+
+// ==================== zenkaku_convert ====================
+{
+  const codes = (r) => (r.notes || []).map((n) => n.code);
+  const conv = (text, o) => zenkakuConvert({ text, ...o }).text;
+  const KEEP = { alnum: 'keep', kana: 'keep', symbol: 'keep', space: 'keep' };
+
+  // --- 変換表そのもの ---
+  // 半角カナブロック（U+FF61〜U+FF9F）と全角側は添字どうしが1対1で対応していないといけない
+  assert.equal(KANA_HAN.length, KANA_ZEN.length);
+  assert.equal(KANA_HAN.length, 0xff9f - 0xff61 + 1);
+  for (let i = 0; i < KANA_HAN.length; i += 1) {
+    assert.equal(KANA_HAN.charCodeAt(i), 0xff61 + i, `半角カナの並びが崩れている: ${i}`);
+  }
+
+  // --- 文字種ごとの向き ---
+  assert.equal(conv('ＡＢＣ０１２', { ...KEEP, alnum: 'han' }), 'ABC012');
+  assert.equal(conv('ABC012', { ...KEEP, alnum: 'zen' }), 'ＡＢＣ０１２');
+  assert.equal(conv('！＃％＆＠：－／＝', { ...KEEP, symbol: 'han' }), '!#%&@:-/=');
+  assert.equal(conv('!#%&@:-/=', { ...KEEP, symbol: 'zen' }), '！＃％＆＠：－／＝');
+  // 英数字と記号は別の文字種なので、片方だけ動かせる
+  assert.equal(conv('ＡＢ：０１', { ...KEEP, alnum: 'han' }), 'AB：01');
+  assert.equal(conv('ＡＢ：０１', { ...KEEP, symbol: 'han' }), 'ＡＢ:０１');
+  // ひらがな・漢字には半角が無いので触らない
+  assert.equal(conv('あいう漢字', { ...KEEP, alnum: 'han', kana: 'han', symbol: 'han', space: 'han' }), 'あいう漢字');
+
+  // --- カタカナ（濁点の合成と分解） ---
+  assert.equal(conv('ガガーン、パン「テスト」・ヴ', { ...KEEP, kana: 'han' }), 'ｶﾞｶﾞｰﾝ､ﾊﾟﾝ｢ﾃｽﾄ｣･ｳﾞ');
+  assert.equal(conv('ｶﾞｶﾞｰﾝ､ﾊﾟﾝ｢ﾃｽﾄ｣･ｳﾞ', { ...KEEP, kana: 'zen' }), 'ガガーン、パン「テスト」・ヴ');
+  // 全角カナ 63 字ぶん、往復して戻ることを確かめる
+  const kana = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンガザダバパヴァィゥェォャュョッー。、「」・';
+  assert.equal(conv(conv(kana, { ...KEEP, kana: 'han' }), { ...KEEP, kana: 'zen' }), kana);
+  // 濁点がつかない字のうしろの濁点は、そのまま全角の濁点になる
+  assert.equal(conv('ｱﾞ', { ...KEEP, kana: 'zen' }), 'ア゛');
+  // 単独の半角濁点も全角へ
+  assert.equal(conv('ﾞﾟ', { ...KEEP, kana: 'zen' }), '゛゜');
+  // 全角カナ＋結合文字（U+3099）も1文字へ合成する（macOSのファイル名で来る形）
+  assert.equal(conv('ガ', { ...KEEP, kana: 'zen' }), 'ガ');
+
+  // --- スペース ---
+  assert.equal(conv('あ　い', { ...KEEP, space: 'han' }), 'あ い');
+  assert.equal(conv('あ い', { ...KEEP, space: 'zen' }), 'あ　い');
+  // NBSP や欧文スペースも半角スペースへ寄せる
+  assert.equal(conv('a b c', { ...KEEP, space: 'han' }), 'a b c');
+  // タブは空白でも触らない（表の桁が崩れるため）
+  assert.equal(conv('a\tb', { ...KEEP, space: 'han' }), 'a\tb');
+
+  // --- 既定（preset ja 相当） ---
+  const ja = zenkakuConvert({ text: '株式会社ＡＢＣ　商事\nﾃｽﾄ ﾃﾞｰﾀ\nTEL：０３－１２３４' });
+  assert.equal(ja.text, '株式会社ABC 商事\nテスト データ\nTEL:03-1234');
+  assert.equal(ja.stats.converted, 18);
+  assert.equal(ja.stats.lines, 3);
+  assert.deepEqual(ja.options, {
+    alnum: 'han', kana: 'zen', symbol: 'han', space: 'han',
+    collapseSpaces: false, trimLines: false, blankLines: 'keep', removeInvisible: false, composeMarks: false,
+  });
+
+  // --- 掃除 ---
+  // 連続する空白は先頭の1文字だけ残す（全角だけの並びは全角のまま）
+  assert.equal(conv('a   b', { ...KEEP, collapseSpaces: true }), 'a b');
+  assert.equal(conv('a　　b', { ...KEEP, collapseSpaces: true }), 'a　b');
+  assert.equal(conv('a\t\t b', { ...KEEP, collapseSpaces: true }), 'a\tb');
+  assert.equal(conv('  a  \n  b  ', { ...KEEP, trimLines: true }), 'a\nb');
+  assert.equal(conv('a\n\n\nb\n', { ...KEEP, blankLines: 'collapse' }), 'a\n\nb\n');
+  assert.equal(conv('a\n\n\nb\n', { ...KEEP, blankLines: 'remove' }), 'a\nb\n');
+  // 空白だけの行も空行として扱う（trim と併用）
+  assert.equal(conv('a\n   \nb\n', { ...KEEP, trimLines: true, blankLines: 'remove' }), 'a\nb\n');
+  // 改行コードは書き換えない
+  assert.equal(conv('Ａ\r\nＢ\r\n'), 'A\r\nB\r\n');
+  assert.equal(conv('a\r\n\r\nb\r\n', { ...KEEP, blankLines: 'remove' }), 'a\r\nb\r\n');
+  // 見えない文字の削除と NFC 合成
+  assert.equal(conv('a​b﻿c', { ...KEEP, removeInvisible: true }), 'abc');
+  assert.equal(conv('が', { ...KEEP, composeMarks: true }), 'が');
+  assert.equal(zenkakuConvert({ text: 'a​b', ...KEEP, removeInvisible: true }).stats.removed, 1);
+
+  // --- 指摘 ---
+  assert.deepEqual(codes(zenkakuConvert({ text: '' })), ['NOTHING']);
+  assert.ok(codes(zenkakuConvert({ text: 'ｱｲｳ', ...KEEP })).includes('HANKAKU_KANA'));
+  assert.ok(codes(zenkakuConvert({ text: 'あ　い', ...KEEP })).includes('ZEN_SPACE'));
+  assert.ok(codes(zenkakuConvert({ text: 'a​b', ...KEEP })).includes('INVISIBLE'));
+  assert.ok(codes(zenkakuConvert({ text: 'が', ...KEEP })).includes('COMBINING'));
+  assert.ok(codes(zenkakuConvert({ text: '1〜5', ...KEEP })).includes('WAVE'));
+  assert.ok(codes(zenkakuConvert({ text: '①㈱Ⅲ', ...KEEP })).includes('PLATFORM'));
+  assert.ok(codes(zenkakuConvert({ text: 'ＡＢ CD', ...KEEP })).includes('MIXED_ALNUM'));
+  // 波ダッシュと環境依存文字は指摘だけで、勝手に書き換えない
+  assert.equal(conv('①㈱〜'), '①㈱〜');
+
+  // --- プリセット ---
+  assert.deepEqual(ZK_PRESETS.ja, { alnum: 'han', kana: 'zen', symbol: 'han', space: 'han' });
+  assert.deepEqual(ZK_TARGETS, ['alnum', 'kana', 'symbol', 'space']);
+  assert.deepEqual(ZK_DIRECTIONS, ['keep', 'han', 'zen']);
+  assert.deepEqual(ZK_BLANK, ['keep', 'collapse', 'remove']);
+
+  // --- 補助関数 ---
+  assert.equal(convertWidth('ＡＢ', { alnum: 'han', kana: 'keep', symbol: 'keep', space: 'keep' }).converted, 2);
+  assert.equal(cleanText('  a  ', { trimLines: true, blankLines: 'keep' }).removed, 4);
+
+  // --- MCPツール ---
+  const t1 = await zenkakuConvertTool({ text: '株式会社ＡＢＣ　ﾃｽﾄ' });
+  assert.equal(t1.text, '株式会社ABC テスト');
+  assert.equal(t1.source.type, 'text');
+  assert.equal(t1.options.kana, 'zen');
+  // preset と個別指定（個別が優先）
+  assert.equal((await zenkakuConvertTool({ text: 'ｱｲｳ ＡＢＣ', preset: 'ja', kana: 'keep' })).text, 'ｱｲｳ ABC');
+  assert.equal((await zenkakuConvertTool({ text: 'ガ ＡＢ', preset: 'han' })).text, 'ｶﾞ AB');
+  assert.equal((await zenkakuConvertTool({ text: 'ガ AB', preset: 'zen' })).text, 'ガ　ＡＢ');
+  const csvPreset = await zenkakuConvertTool({ text: '  Ａ   Ｂ  \n ﾃｽﾄ​ \n', preset: 'csv' });
+  assert.equal(csvPreset.text, 'A B\nテスト\n');
+  assert.equal(csvPreset.preset, 'csv');
+  // 指摘の言語
+  const note = (r, code) => r.notes.find((n) => n.code === code).message;
+  assert.match(note(await zenkakuConvertTool({ text: 'ｱｲｳ', kana: 'keep' }), 'HANKAKU_KANA'), /半角カタカナ/);
+  assert.match(note(await zenkakuConvertTool({ text: 'ｱｲｳ', kana: 'keep', lang: 'en' }), 'HANKAKU_KANA'), /half-width katakana/);
+  // inspect は変換せず点検だけ（本文は返さない・UNCHANGED も出さない）
+  const ins = await zenkakuConvertTool({ text: 'ﾃｽﾄ　①', inspect: true });
+  assert.equal(ins.inspect, true);
+  assert.equal(ins.text, undefined);
+  assert.deepEqual(ins.notes.map((n) => n.code).sort(), ['HANKAKU_KANA', 'PLATFORM', 'ZEN_SPACE']);
+  // 長すぎる本文は切り詰めて知らせる
+  const long = await zenkakuConvertTool({ text: 'ａ'.repeat(200050) });
+  assert.equal([...long.text].length, 200000);
+  assert.ok(long.notes.some((n) => n.code === 'TRUNCATED'));
+
+  // --- 入力の検査 ---
+  await assert.rejects(() => zenkakuConvertTool({ text: 'a', lang: 'fr' }), /lang/);
+  await assert.rejects(() => zenkakuConvertTool({ text: 'a', preset: 'jp' }), /preset/);
+  await assert.rejects(() => zenkakuConvertTool({ text: 'a', alnum: 'full' }), /alnum/);
+  await assert.rejects(() => zenkakuConvertTool({ text: 'a', blankLines: 'drop' }), /blankLines/);
+  await assert.rejects(() => zenkakuConvertTool({}), /text か path/);
+  await assert.rejects(() => zenkakuConvertTool({ text: 'a', path: '/tmp/x' }), /text か path/);
+  assert.ok(new ZenkakuError('x') instanceof Error);
+
+  // path で読んで outputPath へ書き出す
+  const { readFile, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const inPath = join(tmpdir(), `firstch-zenkaku-in-${process.pid}.txt`);
+  const outPath = join(tmpdir(), `firstch-zenkaku-out-${process.pid}.txt`);
+  await writeFile(inPath, '株式会社ＡＢＣ　ﾃｽﾄ\n', 'utf8');
+  const written = await zenkakuConvertTool({ path: inPath, outputPath: outPath });
+  assert.equal(written.output, outPath);
+  assert.equal(written.text, undefined);
+  assert.equal(written.source.name, `firstch-zenkaku-in-${process.pid}.txt`);
+  assert.equal(await readFile(outPath, 'utf8'), '株式会社ABC テスト\n');
   await rm(inPath, { force: true });
   await rm(outPath, { force: true });
 }
