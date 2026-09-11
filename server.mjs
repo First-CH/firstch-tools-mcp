@@ -31,6 +31,7 @@ import { robotsTxtGenerate } from './robots-txt.mjs';
 import { caseConvertTool } from './case-convert.mjs';
 import { zenkakuConvertTool } from './zenkaku.mjs';
 import { csvConvertTool } from './csv-json.mjs';
+import { cidrCalcTool } from './cidr.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -1341,6 +1342,43 @@ server.registerTool(
   async (opts) => {
     await logUsage('zenkaku_convert');
     return asText(await zenkakuConvertTool(opts));
+  },
+);
+
+server.registerTool(
+  'cidr_calc',
+  {
+    title: 'IPアドレス・CIDRの計算',
+    description:
+      'CIDR表記・サブネットマスク・ワイルドカードマスク・単体のIPから、ネットワークアドレス・ブロードキャスト・' +
+      '使えるホストの範囲・アドレス数・逆引きゾーン・2進表記までを計算する（tools.first-ch.com/cidr/ と同一ロジック）。' +
+      'サーバー設定・ファイアウォール・許可リストの作成時のサブネット計算に使う。**IPv4とIPv6の両対応**' +
+      '（IPv6は `::` の省略・末尾のIPv4表記・`[...]`・`%zone` を読み、出力は RFC 5952 に従う）。' +
+      '`192.168.1.5 255.255.255.0`（マスク併記）や `192.168.1.5/0.0.0.255`（ACLのワイルドカード）も同じ入力欄で受け取る。' +
+      '**ホスト数の例外も織り込む**: `/31` は点対点リンクとして2アドレスとも使え（RFC 3021）、`/32` は1台、IPv6にブロードキャストは無い。' +
+      '入力がネットワークアドレスでない（ホスト部にビットが立っている）ときは、設定に書くべき本来のCIDRを notes で返す。' +
+      '**先頭に0の付いたオクテット（192.168.001.1）は受け取らない**（8進数として読む実装があり、同じ表記が別のアドレスになるため）。' +
+      'アドレス帯は IANA の Special-Purpose Address Registry の主要ブロック（プライベート・CGNAT・ループバック・リンクローカル・' +
+      '文書用・マルチキャスト・ULA ほか）と照合して種別を返し、ネットワークがその帯からはみ出す場合も指摘する。' +
+      '`split` を渡すとそのプレフィックス長で均等に分割した一覧を、`contains` を渡すと各アドレスがそのネットワークに入るかを返す。' +
+      '`range` に「10.0.0.5 - 10.0.0.200」のような範囲・CIDR・単体IPを（`;` か改行で区切って）渡すと、' +
+      '**重なりと隣接をまとめたうえで過不足なく覆う最小個数のCIDR集合**へ逆算する。' +
+      '計算はすべてBigIntで行い、完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      cidr: z.string().optional().describe('計算するブロック（例: 192.168.1.0/24 / 10.0.0.1 255.0.0.0 / 2001:db8::1/48。range と併用可）'),
+      split: z.number().int().optional().describe('分割後のプレフィックス長（cidr と一緒に渡す。元より長い値）'),
+      contains: z.array(z.string()).optional().describe('そのネットワークに含まれるかを確かめるIPアドレスの配列（cidr と一緒に渡す）'),
+      range: z
+        .string()
+        .optional()
+        .describe('最小のCIDR集合へ逆算する範囲。1行1件（`;` 区切りも可）で「a - b」「a ~ b」「a..b」やCIDR・単体IPを混ぜられる'),
+      limit: z.number().int().min(1).max(4096).optional().describe('split で返すサブネットの最大件数（既定 256）'),
+      lang: z.enum(['ja', 'en']).optional().describe("指摘事項とエラーの言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('cidr_calc');
+    return asText(await cidrCalcTool(opts));
   },
 );
 

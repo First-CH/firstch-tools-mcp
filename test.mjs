@@ -60,6 +60,10 @@ import {
   zenkakuConvertTool, zenkakuConvert, convertWidth, cleanText,
   ZK_PRESETS, ZK_TARGETS, ZK_DIRECTIONS, ZK_BLANK, KANA_HAN, KANA_ZEN, ZenkakuError,
 } from './zenkaku.mjs';
+import {
+  cidrCalcTool, cidrCalc, cidrParse, cidrParseIp, cidrFormatIp, cidrSplit,
+  cidrFromRange, cidrSummarize, cidrContains, CidrError, CidrCalcError,
+} from './cidr.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -3457,6 +3461,197 @@ assert.equal(over.x_postable, false);
   assert.equal(await readFile(outPath, 'utf8'), '株式会社ABC テスト\n');
   await rm(inPath, { force: true });
   await rm(outPath, { force: true });
+}
+
+// ==================== cidr_calc ====================
+{
+  const codes = (r) => (r.notes || []).map((n) => n.code);
+  const err = (fn) => {
+    try {
+      fn();
+      return null;
+    } catch (e) {
+      return e.code;
+    }
+  };
+
+  // --- アドレスの読み書き ---
+  assert.equal(cidrParseIp('192.168.1.10').value, 3232235786n);
+  assert.equal(cidrParseIp('192.168.1.10').version, 4);
+  assert.equal(cidrFormatIp(3232235786n, 4), '192.168.1.10');
+  // IPv6は RFC 5952（小文字・最長の0連続だけを畳む・同じ長さなら左）
+  assert.equal(cidrFormatIp(0n, 6), '::');
+  assert.equal(cidrFormatIp(1n, 6), '::1');
+  assert.equal(cidrCalc('2001:0:0:1:0:0:0:1/128').network, '2001:0:0:1::1');
+  assert.equal(cidrCalc('2001:DB8::1/128').network, '2001:db8::1');
+  assert.equal(cidrCalc('::ffff:192.168.0.1/128').network, '::ffff:c0a8:1');
+  assert.equal(cidrCalc('[2001:db8::1]/64').cidr, '2001:db8::/64');
+  assert.equal(cidrCalc('2001:db8::1%eth0/64').zone, 'eth0');
+  assert.equal(cidrCalc('2001:db8::1/48').addressExpanded, '2001:0db8:0000:0000:0000:0000:0000:0001');
+  // 先頭の0は8進数と紛らわしいので受け取らない
+  assert.equal(err(() => cidrCalc('192.168.001.1')), 'LEADING_ZERO');
+  assert.equal(err(() => cidrCalc('192.168.1.256')), 'OCTET_RANGE');
+  assert.equal(err(() => cidrCalc('example.com')), 'BAD_IP');
+  assert.equal(err(() => cidrCalc('192.168.1.1/33')), 'BAD_PREFIX');
+  assert.equal(err(() => cidrCalc('2001:db8::1/129')), 'BAD_PREFIX');
+  assert.equal(err(() => cidrCalc('192.168.1.1/')), 'NO_PREFIX');
+  assert.equal(err(() => cidrCalc('')), 'EMPTY');
+  // 1が左から連続しないマスクは成立しない
+  assert.equal(err(() => cidrCalc('192.168.1.1/255.0.255.0')), 'BAD_MASK');
+
+  // --- マスクの読み取り（プレフィックス・ネットマスク・ワイルドカード） ---
+  assert.equal(cidrCalc('192.168.1.5/255.255.255.192').cidr, '192.168.1.0/26');
+  assert.equal(cidrCalc('192.168.1.5 255.255.255.192').prefix, 26);
+  assert.equal(cidrCalc('192.168.1.5/0.0.0.63').prefix, 26);
+  assert.equal(cidrCalc('192.168.1.5/0.0.0.63').maskKind, 'wildcard');
+  assert.equal(cidrCalc('192.168.1.5/255.255.255.192').maskKind, 'netmask');
+  // プレフィックス無しは1アドレス扱い
+  assert.equal(cidrCalc('8.8.8.8').prefix, 32);
+  assert.equal(cidrCalc('8.8.8.8').hadPrefix, false);
+
+  // --- 計算そのもの ---
+  const c = cidrCalc('192.168.1.10/24');
+  assert.equal(c.cidr, '192.168.1.0/24');
+  assert.equal(c.network, '192.168.1.0');
+  assert.equal(c.broadcast, '192.168.1.255');
+  assert.equal(c.hostMin, '192.168.1.1');
+  assert.equal(c.hostMax, '192.168.1.254');
+  assert.equal(c.netmask, '255.255.255.0');
+  assert.equal(c.wildcard, '0.0.0.255');
+  assert.equal(c.total, '256');
+  assert.equal(c.usable, '254');
+  assert.equal(c.isNetworkAddress, false);
+  assert.equal(c.class, 'C');
+  assert.equal(c.integer, '3232235776');
+  assert.equal(c.hex, '0xC0A80100');
+  assert.equal(c.ptr, '0.1.168.192.in-addr.arpa');
+  assert.equal(c.ptrZone, '1.168.192.in-addr.arpa');
+  assert.deepEqual(c.binary, ['11000000', '10101000', '00000001', '00000000']);
+  // /31 は2アドレスとも使える（RFC 3021）・/32 は1台・/30 は2台
+  assert.equal(cidrCalc('10.0.0.0/31').usable, '2');
+  assert.equal(cidrCalc('10.0.0.0/31').broadcast, null);
+  assert.equal(cidrCalc('10.0.0.7/32').usable, '1');
+  assert.equal(cidrCalc('10.0.0.0/30').usable, '2');
+  assert.equal(cidrCalc('0.0.0.0/0').total, '4294967296');
+  // IPv6はブロードキャストが無いので全アドレスが使える
+  const c6 = cidrCalc('2001:db8::1/48');
+  assert.equal(c6.cidr, '2001:db8::/48');
+  assert.equal(c6.last, '2001:db8:0:ffff:ffff:ffff:ffff:ffff');
+  assert.equal(c6.netmask, 'ffff:ffff:ffff::');
+  assert.equal(c6.total, (2n ** 80n).toString());
+  assert.equal(c6.usable, c6.total);
+  assert.equal(c6.broadcast, null);
+  assert.equal(c6.ptrZone, '0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa');
+  // 逆引きゾーンは区切りに合うプレフィックスだけ
+  assert.equal(cidrCalc('192.168.1.0/26').ptrZone, null);
+  assert.equal(cidrCalc('2001:db8::/33').ptrZone, null);
+
+  // --- 予約された用途の判定（いちばん細かい一致を採る） ---
+  const scope = (s) => cidrCalc(s).scope.key;
+  assert.equal(scope('192.168.1.1'), 'private');
+  assert.equal(scope('172.16.0.1'), 'private');
+  assert.equal(scope('172.32.0.1'), 'global'); // /12 の外
+  assert.equal(scope('100.64.0.1'), 'cgnat');
+  assert.equal(scope('127.0.0.1'), 'loopback');
+  assert.equal(scope('169.254.1.1'), 'linklocal');
+  assert.equal(scope('203.0.113.9'), 'doc');
+  assert.equal(scope('224.0.0.1'), 'multicast');
+  assert.equal(scope('8.8.8.8'), 'global');
+  assert.equal(scope('2001:db8::1'), 'doc'); // 2000::/3 より細かい方
+  assert.equal(scope('fd00::1'), 'ula');
+  assert.equal(scope('fe80::1'), 'linklocal');
+  assert.equal(scope('::1'), 'loopback');
+  assert.equal(cidrCalc('10.0.0.0/4').scope.coversAll, false);
+
+  // --- 分割 ---
+  const sp = cidrSplit(cidrParseIp('192.168.1.0').value, 24, 26, 4, 128);
+  assert.equal(sp.count, '4');
+  assert.deepEqual(sp.subnets.map((s) => s.cidr), [
+    '192.168.1.0/26', '192.168.1.64/26', '192.168.1.128/26', '192.168.1.192/26',
+  ]);
+  assert.equal(cidrSplit(0n, 0, 24, 4, 128).truncated, true);
+  assert.equal(err(() => cidrSplit(0n, 24, 16, 4, 8)), 'SPLIT_WIDER');
+
+  // --- 範囲 → 最小のCIDR集合 ---
+  assert.deepEqual(
+    cidrFromRange(cidrParseIp('192.168.1.5').value, cidrParseIp('192.168.1.10').value, 4).map((x) => x.cidr),
+    ['192.168.1.5/32', '192.168.1.6/31', '192.168.1.8/31', '192.168.1.10/32'],
+  );
+  assert.deepEqual(cidrFromRange(0n, 4294967295n, 4).map((x) => x.cidr), ['0.0.0.0/0']);
+  // 隣接・重なりはまとめてから分解する
+  const sum = cidrSummarize('10.0.0.0/24\n10.0.1.0 - 10.0.1.255\n# コメント\n10.0.3.5');
+  assert.deepEqual(sum.cidrs, ['10.0.0.0/23', '10.0.3.5/32']);
+  assert.equal(sum.total, '513');
+  assert.equal(sum.merged.length, 2);
+  assert.equal(sum.inputCount, 3);
+  // 読めない行とバージョン違いは errors に落ちる（残りは計算する）
+  const badSum = cidrSummarize('10.0.0.0/24\nzzz\n2001:db8::/64');
+  assert.equal(badSum.errors.length, 2);
+  assert.equal(badSum.errors[1].code, 'MIXED_VERSION');
+  assert.deepEqual(badSum.cidrs, ['10.0.0.0/24']);
+
+  // --- 包含 ---
+  const net = cidrParseIp('192.168.1.0').value;
+  assert.equal(cidrContains(net, 24, 4, cidrParseIp('192.168.1.77').value), true);
+  assert.equal(cidrContains(net, 24, 4, cidrParseIp('192.168.2.77').value), false);
+
+  // --- MCPツール ---
+  const t1 = await cidrCalcTool({ cidr: '192.168.1.0/24' });
+  assert.equal(t1.ok, true);
+  assert.equal(t1.cidr, '192.168.1.0/24');
+  assert.equal(t1.broadcast, '192.168.1.255');
+  assert.equal(t1.usable_hosts, '254');
+  assert.equal(t1.type.key, 'private');
+  assert.equal(t1.binary, '11000000.10101000.00000001.00000000');
+  assert.equal(t1.is_network_address, true);
+  // ホスト部にビットが立っていれば本来のCIDRを知らせる
+  assert.ok(codes(await cidrCalcTool({ cidr: '192.168.1.130/24' })).includes('HOST_BITS'));
+  assert.ok(codes(await cidrCalcTool({ cidr: '10.0.0.0/31' })).includes('P2P'));
+  assert.ok(codes(await cidrCalcTool({ cidr: '2001:db8::/64' })).includes('V6_NO_BROADCAST'));
+  assert.ok(codes(await cidrCalcTool({ cidr: '2001:db8::/96' })).includes('V6_SLAAC'));
+  // 文言の言語
+  assert.match((await cidrCalcTool({ cidr: '10.0.0.0/31' })).notes[0].message, /点対点/);
+  assert.match((await cidrCalcTool({ cidr: '10.0.0.0/31', lang: 'en' })).notes[0].message, /point-to-point/);
+  assert.equal((await cidrCalcTool({ cidr: '10.0.0.0/8', lang: 'en' })).type.label, 'Private (RFC 1918)');
+  // 壊れた入力は例外ではなく ok:false（直しどころを文で返す）
+  const bad = await cidrCalcTool({ cidr: '192.168.001.1' });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error.code, 'LEADING_ZERO');
+  assert.match(bad.error.message, /8進数/);
+  // 分割
+  const split = await cidrCalcTool({ cidr: '192.168.1.0/24', split: 26 });
+  assert.equal(split.subnets.count, '4');
+  assert.equal(split.subnets.list.length, 4);
+  assert.equal(split.subnets.list[1].cidr, '192.168.1.64/26');
+  assert.equal(split.subnets.list[1].broadcast, '192.168.1.127');
+  const trunc = await cidrCalcTool({ cidr: '10.0.0.0/8', split: 24, limit: 3 });
+  assert.equal(trunc.subnets.truncated, true);
+  assert.equal(trunc.subnets.list.length, 3);
+  assert.equal(trunc.subnets.count, '65536');
+  assert.ok(codes(trunc).includes('SPLIT_TRUNCATED'));
+  // 包含の判定
+  const cont = await cidrCalcTool({ cidr: '192.168.1.0/24', contains: ['192.168.1.77', '10.0.0.1', 'zzz', '2001:db8::1'] });
+  assert.deepEqual(cont.contains.map((x) => x.inside), [true, false, null, null]);
+  assert.equal(cont.contains[2].error.code, 'BAD_IP');
+  assert.equal(cont.contains[3].error.code, 'MIXED_VERSION');
+  // 範囲の逆算（`;` 区切りでも改行でも受ける）
+  const rng = await cidrCalcTool({ range: '192.168.1.5 - 192.168.1.200;192.168.1.201 ~ 192.168.1.255' });
+  assert.equal(rng.range.merged.length, 1);
+  assert.equal(rng.range.merged[0].start, '192.168.1.5');
+  assert.equal(rng.range.merged[0].end, '192.168.1.255');
+  assert.equal(rng.range.total_addresses, '251');
+  assert.deepEqual(rng.range.cidrs.slice(0, 3), ['192.168.1.5/32', '192.168.1.6/31', '192.168.1.8/29']);
+
+  // --- 入力の検査 ---
+  await assert.rejects(() => cidrCalcTool({}), /cidr か range/);
+  await assert.rejects(() => cidrCalcTool({ cidr: '10.0.0.0/8', lang: 'fr' }), /lang/);
+  await assert.rejects(() => cidrCalcTool({ split: 24 }), /split は cidr/);
+  await assert.rejects(() => cidrCalcTool({ contains: ['10.0.0.1'] }), /contains は cidr/);
+  await assert.rejects(() => cidrCalcTool({ cidr: '10.0.0.0/8', contains: '10.0.0.1' }), /配列/);
+  await assert.rejects(() => cidrCalcTool({ cidr: '10.0.0.0/8', split: 9.5 }), /split は整数/);
+  await assert.rejects(() => cidrCalcTool({ cidr: '10.0.0.0/8', split: 9, limit: 0 }), /limit/);
+  assert.ok(new CidrCalcError('x') instanceof Error);
+  assert.ok(new CidrError('BAD_IP', {}) instanceof Error);
 }
 
 console.log('all tests passed');

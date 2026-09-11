@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 30 registered tools, and `tools/call` actually executes handlers
+// returns all 31 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -61,6 +61,7 @@ try {
     'aspect_ratio_calc',
     'base64_encode',
     'case_convert',
+    'cidr_calc',
     'color_convert',
     'contrast_check',
     'count_chars',
@@ -583,6 +584,33 @@ try {
 
   const zkErr = await request('tools/call', { name: 'zenkaku_convert', arguments: { text: 'a', alnum: 'full' } }, 80);
   assert.ok(zkErr.result?.isError, `zenkaku_convert should reject an unknown direction: ${JSON.stringify(zkErr)}`);
+
+  // cidr_calc: 計算・分割・包含・範囲の逆算・壊れた入力
+  const cdRes = await callTool('cidr_calc', { cidr: '192.168.1.10/24' }, 81);
+  assert.equal(cdRes.cidr, '192.168.1.0/24', `cidr_calc network mismatch: ${JSON.stringify(cdRes.cidr)}`);
+  assert.equal(cdRes.broadcast, '192.168.1.255', `cidr_calc broadcast mismatch: ${JSON.stringify(cdRes.broadcast)}`);
+  assert.equal(cdRes.usable_hosts, '254', `cidr_calc usable hosts mismatch: ${JSON.stringify(cdRes.usable_hosts)}`);
+  assert.ok((cdRes.notes || []).some((n) => n.code === 'HOST_BITS'),
+    `cidr_calc should flag host bits: ${JSON.stringify(cdRes.notes)}`);
+
+  const cdSplit = await callTool('cidr_calc', { cidr: '192.168.1.0/24', split: 26, contains: ['192.168.1.77', '10.0.0.1'] }, 82);
+  assert.equal(cdSplit.subnets?.list?.[1]?.cidr, '192.168.1.64/26', `cidr_calc split mismatch: ${JSON.stringify(cdSplit.subnets)}`);
+  assert.deepEqual((cdSplit.contains || []).map((x) => x.inside), [true, false],
+    `cidr_calc contains mismatch: ${JSON.stringify(cdSplit.contains)}`);
+
+  const cdRange = await callTool('cidr_calc', { range: '10.0.0.0/24;10.0.1.0 - 10.0.1.255' }, 83);
+  assert.deepEqual(cdRange.range?.cidrs, ['10.0.0.0/23'], `cidr_calc range mismatch: ${JSON.stringify(cdRange.range)}`);
+
+  const cdV6 = await callTool('cidr_calc', { cidr: '2001:db8::1/48', lang: 'en' }, 84);
+  assert.equal(cdV6.cidr, '2001:db8::/48', `cidr_calc IPv6 mismatch: ${JSON.stringify(cdV6.cidr)}`);
+  assert.equal(cdV6.last_address, '2001:db8:0:ffff:ffff:ffff:ffff:ffff', `cidr_calc IPv6 last mismatch: ${JSON.stringify(cdV6.last_address)}`);
+
+  const cdBad = await callTool('cidr_calc', { cidr: '192.168.001.1' }, 85);
+  assert.equal(cdBad.ok, false, `cidr_calc should report a bad address: ${JSON.stringify(cdBad)}`);
+  assert.equal(cdBad.error?.code, 'LEADING_ZERO', `cidr_calc error code mismatch: ${JSON.stringify(cdBad.error)}`);
+
+  const cdErr = await request('tools/call', { name: 'cidr_calc', arguments: { split: 26 } }, 86);
+  assert.ok(cdErr.result?.isError, `cidr_calc should reject split without cidr: ${JSON.stringify(cdErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();
