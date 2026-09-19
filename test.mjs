@@ -64,6 +64,10 @@ import {
   cidrCalcTool, cidrCalc, cidrParse, cidrParseIp, cidrFormatIp, cidrSplit,
   cidrFromRange, cidrSummarize, cidrContains, CidrError, CidrCalcError,
 } from './cidr.mjs';
+import {
+  dateCalcTool, dcToDays, dcFromDays, dcWeekday, dcParseDate, dcRun,
+  HOLIDAYS, DateCalcError, DateCalcToolError,
+} from './date-calc.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -3652,6 +3656,152 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => cidrCalcTool({ cidr: '10.0.0.0/8', split: 9, limit: 0 }), /limit/);
   assert.ok(new CidrCalcError('x') instanceof Error);
   assert.ok(new CidrError('BAD_IP', {}) instanceof Error);
+}
+
+// ==================== date_calc ====================
+{
+  // --- 暦の土台（Date を経由しないので、ここがずれると全部ずれる） ---
+  assert.equal(dcToDays(1970, 1, 1), 0);
+  assert.equal(dcToDays(2026, 9, 20), 20716);
+  assert.deepEqual(dcFromDays(20716), { y: 2026, m: 9, d: 20 });
+  assert.equal(dcWeekday(dcToDays(2026, 9, 20)), 0); // 日曜
+  assert.equal(dcWeekday(dcToDays(1970, 1, 1)), 4); // 木曜
+  // うるう年（100で割れるが400で割れない1900年は平年・2000年はうるう年）
+  assert.equal(dcToDays(2000, 3, 1) - dcToDays(2000, 2, 28), 2);
+  assert.equal(dcToDays(1900, 3, 1) - dcToDays(1900, 2, 28), 1);
+  for (const [y, m, d] of [[1583, 1, 1], [1899, 12, 31], [2026, 2, 28], [2400, 12, 31], [9999, 12, 31]]) {
+    const z = dcToDays(y, m, d);
+    assert.deepEqual(dcFromDays(z), { y, m, d }, `round trip ${y}-${m}-${d}`);
+  }
+  // 日付の読み取り（区切りは - / . 年月日、8桁も可）
+  for (const s of ['2026-09-20', '2026/9/20', '2026.9.20', '20260920', '2026年9月20日']) {
+    assert.equal(dcParseDate(s).days, 20716, s);
+  }
+  assert.throws(() => dcParseDate('2026-02-30'), (e) => e.code === 'NO_SUCH_DATE');
+  assert.throws(() => dcParseDate('2026-13-01'), (e) => e.code === 'BAD_DATE');
+  assert.throws(() => dcParseDate(''), (e) => e.code === 'EMPTY_DATE');
+  assert.throws(() => dcParseDate('1000-01-01'), (e) => e.code === 'YEAR_RANGE');
+
+  // --- 祝日表（内閣府のCSV由来） ---
+  assert.equal(HOLIDAYS.days['2026-01-01'], '元日');
+  assert.equal(HOLIDAYS.days['2026-05-06'], '振替休日'); // 5/3が日曜→5/4,5/5も祝日なので5/6へ
+  assert.equal(HOLIDAYS.days['2026-09-22'], '国民の休日'); // 敬老の日と秋分の日に挟まれた日
+  assert.equal(HOLIDAYS.days['2026-01-12'], '成人の日'); // ハッピーマンデー
+  assert.equal(HOLIDAYS.names['秋分の日'], 'Autumnal Equinox Day');
+
+  // --- 2つの日付の間 ---
+  const bt = await dateCalcTool({ start: '2026-09-01', end: '2026-09-30' });
+  assert.equal(bt.calendar_days, 30);
+  assert.equal(bt.days_between, 29);
+  assert.equal(bt.business_days, 19);
+  assert.equal(bt.weekend_days, 8);
+  assert.equal(bt.holiday_days, 3);
+  assert.deepEqual(bt.holidays.map((h) => h.date), ['2026-09-21', '2026-09-22', '2026-09-23']);
+  assert.equal(bt.holidays[0].name, '敬老の日');
+  assert.equal(bt.start.weekday, '火');
+  // 開始日を数えないと1日減る
+  const btEx = await dateCalcTool({ start: '2026-09-01', end: '2026-09-30', include_start: false });
+  assert.equal(btEx.calendar_days, 29);
+  assert.equal(btEx.business_days, 18);
+  // 逆順で渡しても入れ替えて計算し、その旨を返す
+  const btSwap = await dateCalcTool({ start: '2026-09-30', end: '2026-09-01' });
+  assert.equal(btSwap.calendar_days, 30);
+  assert.ok(btSwap.notes.some((n) => n.code === 'SWAPPED'));
+  // 年月日の内訳
+  const btY = await dateCalcTool({ start: '2024-02-29', end: '2026-09-20' });
+  assert.deepEqual(btY.breakdown, { years: 2, months: 6, days: 22, total_months: 30 }); // 2024-02-29 の30ヶ月後は 2026-08-29（月末で丸める）
+  // 祝日を数えない / 週の休みなし
+  const btNo = await dateCalcTool({ start: '2026-09-01', end: '2026-09-30', holidays: false });
+  assert.equal(btNo.business_days, 22);
+  const btAll = await dateCalcTool({ start: '2026-09-01', end: '2026-09-30', weekend: 'none', holidays: false });
+  assert.equal(btAll.business_days, 30);
+  // 自社の休業日と休日出勤
+  const btC = await dateCalcTool({ start: '2026-09-01', end: '2026-09-30', closed_dates: ['2026-09-01', '2026-09-02'], work_dates: ['2026-09-21'] });
+  assert.equal(btC.business_days, 18);
+  assert.equal(btC.extra_closed_days, 2);
+  assert.equal(btC.extra_work_days, 1);
+  // 年末年始
+  const btYe = await dateCalcTool({ start: '2026-12-28', end: '2027-01-04', year_end: true });
+  assert.equal(btYe.business_days, 2); // 12/28(月) と 1/4(月) だけ
+  assert.equal(btYe.year_end_days, 6);
+  // 祝日表の範囲外は指摘する
+  const btOut = await dateCalcTool({ start: '2030-01-01', end: '2030-01-31' });
+  assert.ok(btOut.notes.some((n) => n.code === 'OUT_OF_TABLE'));
+
+  // --- 起点日＋N ---
+  const ad = await dateCalcTool({ mode: 'add', base: '2026-09-15', n: 10, unit: 'business' });
+  assert.equal(ad.result.date, '2026-10-02');
+  assert.equal(ad.calendar_days, 17);
+  assert.equal(ad.skipped_days.length, 7);
+  assert.equal(ad.skipped_days[2].type, 'holiday');
+  assert.equal(ad.skipped_days[2].name, '敬老の日');
+  // 初日算入で1日手前になる
+  const adInc = await dateCalcTool({ mode: 'add', base: '2026-09-15', n: 10, unit: 'business', include_start: true });
+  assert.equal(adInc.result.date, '2026-10-01');
+  // 過去へ数える
+  const adBack = await dateCalcTool({ mode: 'add', base: '2026-09-24', n: -1, unit: 'business' });
+  assert.equal(adBack.result.date, '2026-09-18'); // 21〜23は祝日・19,20は土日
+  // 暦日・週・月・年
+  assert.equal((await dateCalcTool({ mode: 'add', base: '2026-09-20', n: 30, unit: 'days' })).result.date, '2026-10-20');
+  assert.equal((await dateCalcTool({ mode: 'add', base: '2026-09-20', n: 2, unit: 'weeks' })).result.date, '2026-10-04');
+  assert.equal((await dateCalcTool({ mode: 'add', base: '2026-01-31', n: 1, unit: 'months' })).result.date, '2026-02-28');
+  assert.equal((await dateCalcTool({ mode: 'add', base: '2024-02-29', n: 1, unit: 'years' })).result.date, '2025-02-28');
+  // 期日が休みのときに寄せる
+  const adAdj = await dateCalcTool({ mode: 'add', base: '2026-09-12', n: 30, unit: 'days', adjust: 'next' });
+  assert.equal(adAdj.before_adjust.date, '2026-10-12'); // スポーツの日
+  assert.equal(adAdj.result.date, '2026-10-13');
+  assert.equal(adAdj.moved_days, 1);
+  const adPrev = await dateCalcTool({ mode: 'add', base: '2026-09-12', n: 30, unit: 'days', adjust: 'prev' });
+  assert.equal(adPrev.result.date, '2026-10-09');
+  // 英語では曜日も祝日名も英語になる
+  const adEn = await dateCalcTool({ mode: 'add', base: '2026-09-15', n: 10, unit: 'business', lang: 'en' });
+  assert.equal(adEn.result.weekday, 'Fri');
+  assert.equal(adEn.skipped_days[2].name, 'Respect for the Aged Day');
+  assert.equal(adEn.skipped_days[2].type_label, 'Public holiday');
+
+  // --- 支払サイト ---
+  // 月末締め翌月末払い: 10/31は土曜なので前営業日の10/30へ
+  const pay = await dateCalcTool({ mode: 'payment', invoice: '2026-09-20' });
+  assert.equal(pay.closing.date, '2026-09-30');
+  assert.equal(pay.payment.date, '2026-10-30');
+  assert.equal(pay.before_adjust.date, '2026-10-31');
+  assert.equal(pay.days_from_invoice, 40);
+  assert.equal(pay.days_from_closing, 30);
+  assert.equal(pay.business_days_from_closing, 21);
+  // 20日締め翌月10日払い
+  const pay2 = await dateCalcTool({ mode: 'payment', invoice: '2026-09-25', closing: 20, pay_months: 1, pay_day: 10 });
+  assert.equal(pay2.closing.date, '2026-10-20');
+  assert.equal(pay2.payment.date, '2026-11-10');
+  // 締めなし（発生日から）＋翌営業日へ繰り下げ
+  const pay3 = await dateCalcTool({ mode: 'payment', invoice: '2026-09-20', closing: 'none', pay_months: 0, pay_day: 23, pay_adjust: 'next' });
+  assert.equal(pay3.closing.date, '2026-09-20');
+  assert.equal(pay3.before_adjust.date, '2026-09-23'); // 秋分の日
+  assert.equal(pay3.payment.date, '2026-09-24');
+  // 2月に31日は無いので月末へ丸める
+  const pay4 = await dateCalcTool({ mode: 'payment', invoice: '2026-01-20', closing: 31, pay_months: 1, pay_day: 31, pay_adjust: 'none' });
+  assert.equal(pay4.closing.date, '2026-01-31');
+  assert.equal(pay4.payment.date, '2026-02-28');
+
+  // --- 壊れた入力は例外ではなく結果として返す ---
+  const bad = await dateCalcTool({ start: '2026-02-30', end: '2026-09-30' });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error.code, 'NO_SUCH_DATE');
+  const badEn = await dateCalcTool({ start: '2026-02-30', end: '2026-09-30', lang: 'en' });
+  assert.match(badEn.error.message, /does not exist/);
+  // 全部休みにすると営業日が見つからない
+  const noBiz = await dateCalcTool({ mode: 'add', base: '2026-09-20', n: 1, unit: 'business', weekend: 'none', holidays: false, closed_dates: [] });
+  assert.equal(noBiz.result.date, '2026-09-21');
+
+  // --- 呼び出し方の誤りは例外 ---
+  await assert.rejects(() => dateCalcTool({ start: '2026-09-01' }), /start と end/);
+  await assert.rejects(() => dateCalcTool({ mode: 'add', n: 3 }), /base/);
+  await assert.rejects(() => dateCalcTool({ mode: 'add', base: '2026-09-01' }), /n（加える量）/);
+  await assert.rejects(() => dateCalcTool({ mode: 'payment' }), /invoice/);
+  await assert.rejects(() => dateCalcTool({ start: '2026-09-01', end: '2026-09-02', lang: 'fr' }), /lang/);
+  await assert.rejects(() => dateCalcTool({ start: '2026-09-01', end: '2026-09-02', weekend: 'mon' }), /weekend/);
+  await assert.rejects(() => dateCalcTool({ mode: 'add', base: '2026-09-01', n: 1, unit: 'fortnights' }), /unit/);
+  assert.ok(new DateCalcToolError('x') instanceof Error);
+  assert.ok(new DateCalcError('BAD_DATE', {}) instanceof Error);
 }
 
 console.log('all tests passed');

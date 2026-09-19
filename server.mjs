@@ -32,6 +32,7 @@ import { caseConvertTool } from './case-convert.mjs';
 import { zenkakuConvertTool } from './zenkaku.mjs';
 import { csvConvertTool } from './csv-json.mjs';
 import { cidrCalcTool } from './cidr.mjs';
+import { dateCalcTool } from './date-calc.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -1379,6 +1380,52 @@ server.registerTool(
   async (opts) => {
     await logUsage('cidr_calc');
     return asText(await cidrCalcTool(opts));
+  },
+);
+
+server.registerTool(
+  'date_calc',
+  {
+    title: '日数・営業日の計算',
+    description:
+      '2つの日付の間の日数・営業日数、起点日から N日後／N営業日後の期日、締め日と支払サイトからの支払日を計算する' +
+      '（tools.first-ch.com/date-calc/ と同一ロジック）。納期・検収期限・支払サイトの確認に使う。' +
+      '**営業日は「土日・日本の祝日・指定した休業日を除いた日」**で、祝日は内閣府「国民の祝日について」の一覧を同梱しており' +
+      '（1970年〜2027年）、ハッピーマンデーで動く祝日・日曜と重なったときの振替休日・前後を祝日に挟まれた国民の休日' +
+      '（2026-09-22 など）・年で変わる春分の日/秋分の日がすべて入る。' +
+      '`mode="between"` は start と end の間の暦日数・営業日数・休みの内訳・期間内の祝日一覧を返す。' +
+      '`mode="add"` は base から n（負なら過去へ）を unit の単位で進めた期日を返し、飛ばした休みも一覧で返す。' +
+      '**「受領後10営業日」は初日を数えるかで1日ずれる**ため、民法の原則どおり翌日起算を既定とし、' +
+      '`include_start=true` で起点日を1日目として数える。' +
+      '`mode="payment"` は invoice・closing（締め日）・pay_months・pay_day から支払日を求め、' +
+      '休みに当たったら `pay_adjust`（既定 prev＝前営業日へ繰り上げ・日本の商慣習）で寄せる。' +
+      '週の休み（weekend）・年末年始（year_end）・自社の休業日（closed_dates）・休日出勤（work_dates）を指定できる。' +
+      '日付は「1970-01-01からの通算日」の整数で扱うのでサーバーのタイムゾーンで1日ずれない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      mode: z.enum(['between', 'add', 'payment']).optional().describe('計算の種類（省略時は渡した引数から判定）'),
+      start: z.string().optional().describe('mode=between の開始日（2026-09-01 / 2026/9/1 / 20260901）'),
+      end: z.string().optional().describe('mode=between の終了日'),
+      base: z.string().optional().describe('mode=add の起点日'),
+      n: z.number().int().optional().describe('mode=add で加える量（負の値なら過去へ数える）'),
+      unit: z.enum(['days', 'business', 'weeks', 'months', 'years']).optional().describe("加える単位（既定 'business'）"),
+      include_start: z.boolean().optional().describe('起点日（開始日）を1日目として数えるか。between の既定は true・add の既定は false'),
+      adjust: z.enum(['none', 'next', 'prev']).optional().describe("期日が休みのときの寄せ方（既定 'none'・unit=business では常に営業日になるため無効）"),
+      invoice: z.string().optional().describe('mode=payment の請求・発生日'),
+      closing: z.union([z.number().int(), z.string()]).optional().describe("締め日。'eom'（月末・既定）/ 1〜31 / 'none'（締めなし＝発生日から）"),
+      pay_months: z.number().int().optional().describe('支払月（0=当月 / 1=翌月・既定 / 2=翌々月 …12まで）'),
+      pay_day: z.union([z.number().int(), z.string()]).optional().describe("支払日。'eom'（月末・既定）か 1〜31"),
+      pay_adjust: z.enum(['none', 'next', 'prev']).optional().describe("支払日が休みのときの寄せ方（既定 'prev'）"),
+      weekend: z.enum(['sat-sun', 'sun', 'fri-sat', 'none']).optional().describe("週の休み（既定 'sat-sun'）"),
+      holidays: z.boolean().optional().describe('日本の祝日を休みとして数えるか（既定 true）'),
+      year_end: z.boolean().optional().describe('年末年始（12/29〜1/3）も休みにするか（既定 false）'),
+      closed_dates: z.array(z.string()).optional().describe('追加の休業日（夏季休業・創立記念日など）'),
+      work_dates: z.array(z.string()).optional().describe('追加の営業日（休日出勤）。土日祝でも必ず営業日として数える'),
+      lang: z.enum(['ja', 'en']).optional().describe("曜日・祝日名・指摘事項の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('date_calc');
+    return asText(await dateCalcTool(opts));
   },
 );
 

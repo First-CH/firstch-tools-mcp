@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 31 registered tools, and `tools/call` actually executes handlers
+// returns all 32 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -67,6 +67,7 @@ try {
     'count_chars',
     'cron_explain',
     'csv_convert',
+    'date_calc',
     'diff_check',
     'encoding_convert',
     'hash_generate',
@@ -611,6 +612,27 @@ try {
 
   const cdErr = await request('tools/call', { name: 'cidr_calc', arguments: { split: 26 } }, 86);
   assert.ok(cdErr.result?.isError, `cidr_calc should reject split without cidr: ${JSON.stringify(cdErr)}`);
+
+  // date_calc: 2日付間・営業日の期日・支払サイト・壊れた入力
+  const dcBetween = await callTool('date_calc', { start: '2026-09-01', end: '2026-09-30' }, 87);
+  assert.equal(dcBetween.business_days, 19, `date_calc business days mismatch: ${JSON.stringify(dcBetween.business_days)}`);
+  assert.equal(dcBetween.holiday_days, 3, `date_calc holiday days mismatch: ${JSON.stringify(dcBetween.holiday_days)}`);
+  assert.equal(dcBetween.holidays?.[1]?.name, '国民の休日', `date_calc holiday name mismatch: ${JSON.stringify(dcBetween.holidays)}`);
+
+  const dcAdd = await callTool('date_calc', { mode: 'add', base: '2026-09-15', n: 10, unit: 'business', lang: 'en' }, 88);
+  assert.equal(dcAdd.result?.date, '2026-10-02', `date_calc due date mismatch: ${JSON.stringify(dcAdd.result)}`);
+  assert.equal(dcAdd.skipped_days?.length, 7, `date_calc skipped days mismatch: ${JSON.stringify(dcAdd.skipped_days)}`);
+
+  const dcPay = await callTool('date_calc', { mode: 'payment', invoice: '2026-09-20' }, 89);
+  assert.equal(dcPay.closing?.date, '2026-09-30', `date_calc closing mismatch: ${JSON.stringify(dcPay.closing)}`);
+  assert.equal(dcPay.payment?.date, '2026-10-30', `date_calc payment mismatch: ${JSON.stringify(dcPay.payment)}`);
+
+  const dcBad = await callTool('date_calc', { start: '2026-02-30', end: '2026-09-30' }, 90);
+  assert.equal(dcBad.ok, false, `date_calc should report a bad date: ${JSON.stringify(dcBad)}`);
+  assert.equal(dcBad.error?.code, 'NO_SUCH_DATE', `date_calc error code mismatch: ${JSON.stringify(dcBad.error)}`);
+
+  const dcErr = await request('tools/call', { name: 'date_calc', arguments: { start: '2026-09-01' } }, 91);
+  assert.ok(dcErr.result?.isError, `date_calc should reject start without end: ${JSON.stringify(dcErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();
