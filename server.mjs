@@ -33,6 +33,7 @@ import { zenkakuConvertTool } from './zenkaku.mjs';
 import { csvConvertTool } from './csv-json.mjs';
 import { cidrCalcTool } from './cidr.mjs';
 import { dateCalcTool } from './date-calc.mjs';
+import { htmlToMarkdownTool } from './html-md.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -1426,6 +1427,55 @@ server.registerTool(
   async (opts) => {
     await logUsage('date_calc');
     return asText(await dateCalcTool(opts));
+  },
+);
+
+server.registerTool(
+  'html_to_markdown',
+  {
+    title: 'HTML → Markdown 変換',
+    description:
+      'HTML断片をMarkdownへ変換する（tools.first-ch.com/html-md/ と同一ロジック）。' +
+      '取得したページの本文をMarkdownに直して渡す前処理、既存サイトの原稿をMarkdown管理へ移す移行作業に使う。' +
+      '見出し（h1〜h6）・段落・改行・強調・取り消し線・リスト（入れ子・start 属性・チェックボックス）・' +
+      '表（thead / caption と align / text-align による列の配置）・リンク・画像・コードブロック' +
+      "（class=\"language-*\" から言語を拾う）・引用・水平線・定義リスト・figure / figcaption・details / summary に対応し、" +
+      'script・style・hidden や display:none の要素・装飾のための div / span は自動で取り除く。' +
+      '**HTMLの解釈にブラウザのDOMを使っていない**——字句解析も木の組み立ても自前なので、Web版と結果が一致し、' +
+      '閉じ忘れたタグは末尾で閉じ、行き場のない閉じタグは捨てて変換を続ける' +
+      '（**属性の引用符が閉じていない場合だけは打ち切る**。続けると残りの文書全体を1つの属性値として飲み込むため）。' +
+      '補った内容・落とした内容はすべて notes で返す。' +
+      '**Markdownに書けないものは黙って捨てない**: セルの結合（colspan は空セルで埋め、rowspan は先頭行にだけ値が入る）・' +
+      'セル内のリスト/コードブロック（その表だけHTMLのまま残す）・定義リスト（Markdown Extra の ": " 記法）・' +
+      'sup / sub / mark / iframe / svg（unknown で「HTMLのまま残す/文字だけ残す/取り除く」を選ぶ）。' +
+      '表・タスクリスト・取り消し線はGFMの拡張でCommonMarkには無いため gfm=false で切れる。' +
+      '**相対URLは貼り先で必ず壊れる**ので、base_url を渡すとリンクと画像を絶対URLへ直す（アンカーと絶対URLはそのまま）。' +
+      'main_only=true は main / article の中だけを取り出して header・nav・footer・aside・form を落とす。' +
+      'html か path のどちらか一方を渡す。outputPath を渡すとファイルへ書き出す（本文は返さない）。' +
+      'ネットワークへは出ないので、ページの取得は呼び出し側で行うこと。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      html: z.string().optional().describe('変換するHTML（path と排他）'),
+      path: z.string().optional().describe('変換するHTMLファイルの絶対パス（UTF-8として読む。html と排他）'),
+      outputPath: z.string().optional().describe('結果を書き出す絶対パス（指定すると markdown は返さない）'),
+      main_only: z.boolean().optional().describe('main / article の中だけを取り出し、header・nav・footer・aside・form を落とす（既定 false）'),
+      base_url: z.string().optional().describe('相対URLを絶対URLへ直すための基準（元ページのアドレス）'),
+      gfm: z.boolean().optional().describe('表・タスクリスト・取り消し線（GitHub Flavored Markdown。既定 true）'),
+      escape: z.boolean().optional().describe('本文中の * _ [ ` や行頭の # - 1. をバックスラッシュで打ち消す（既定 true）'),
+      pad_tables: z.boolean().optional().describe('表の桁を揃える（全角を2桁として数える。既定 true）'),
+      headings: z.enum(['atx', 'setext']).optional().describe("見出しの書き方（既定 'atx' = #）"),
+      bullet: z.enum(['-', '*', '+']).optional().describe("箇条書きの印（既定 '-'）"),
+      code_block: z.enum(['fenced', 'indented']).optional().describe("コードブロックの書き方（既定 'fenced'）"),
+      links: z.enum(['inline', 'reference', 'strip']).optional().describe("リンクの書き方（既定 'inline'。'reference' は末尾にまとめる / 'strip' は文字だけ残す）"),
+      images: z.enum(['keep', 'alt', 'drop']).optional().describe("画像の扱い（既定 'keep' = ![alt](src)）"),
+      tables: z.enum(['gfm', 'html']).optional().describe("表の書き方（既定 'gfm'）"),
+      unknown: z.enum(['keep', 'text', 'drop']).optional().describe("Markdownに対応が無い要素の扱い（既定 'keep' = HTMLのまま）"),
+      br: z.enum(['spaces', 'backslash', 'html', 'space']).optional().describe("<br> の書き方（既定 'spaces' = 行末に半角スペース2つ）"),
+      lang: z.enum(['ja', 'en']).optional().describe("notes の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('html_to_markdown');
+    return asText(await htmlToMarkdownTool(opts));
   },
 );
 

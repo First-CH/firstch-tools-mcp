@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 32 registered tools, and `tools/call` actually executes handlers
+// returns all 33 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -72,6 +72,7 @@ try {
     'encoding_convert',
     'hash_generate',
     'html_escape',
+    'html_to_markdown',
     'json_to_yaml',
     'jsonld_generate',
     'jwt_decode',
@@ -633,6 +634,32 @@ try {
 
   const dcErr = await request('tools/call', { name: 'date_calc', arguments: { start: '2026-09-01' } }, 91);
   assert.ok(dcErr.result?.isError, `date_calc should reject start without end: ${JSON.stringify(dcErr)}`);
+
+  // html_to_markdown: 見出し/リスト/表・本文だけの抽出・壊れたHTML・壊れた引数
+  const hmBasic = await callTool('html_to_markdown', {
+    html: '<h1>Title</h1><ul><li>a</li><li>b</li></ul><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>',
+  }, 92);
+  assert.equal(hmBasic.markdown, '# Title\n\n- a\n- b\n\n| A   | B   |\n| --- | --- |\n| 1   | 2   |\n',
+    `html_to_markdown output mismatch: ${JSON.stringify(hmBasic.markdown)}`);
+  assert.equal(hmBasic.stats?.headings, 1, `html_to_markdown stats mismatch: ${JSON.stringify(hmBasic.stats)}`);
+
+  const hmMain = await callTool('html_to_markdown', {
+    html: '<body><header>nav</header><main><h2>Body</h2><p><a href="/a">x</a></p></main><footer>f</footer></body>',
+    main_only: true,
+    base_url: 'https://example.com/blog/1/',
+    lang: 'en',
+  }, 93);
+  assert.equal(hmMain.markdown, '## Body\n\n[x](https://example.com/a)\n',
+    `html_to_markdown main_only mismatch: ${JSON.stringify(hmMain.markdown)}`);
+  assert.ok(hmMain.notes?.some((n) => n.code === 'MAIN_ONLY'),
+    `html_to_markdown should report MAIN_ONLY: ${JSON.stringify(hmMain.notes)}`);
+
+  const hmBroken = await callTool('html_to_markdown', { html: '<p>a<b>bold<a href="x>c' }, 94);
+  assert.ok(hmBroken.notes?.some((n) => n.code === 'BROKEN_TAG'),
+    `html_to_markdown should report BROKEN_TAG: ${JSON.stringify(hmBroken.notes)}`);
+
+  const hmErr = await request('tools/call', { name: 'html_to_markdown', arguments: {} }, 95);
+  assert.ok(hmErr.result?.isError, `html_to_markdown should reject an empty call: ${JSON.stringify(hmErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

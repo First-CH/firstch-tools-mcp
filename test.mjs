@@ -65,6 +65,10 @@ import {
   cidrFromRange, cidrSummarize, cidrContains, CidrError, CidrCalcError,
 } from './cidr.mjs';
 import {
+  htmlToMarkdownTool, hmToMarkdown, hmParse, hmTokenize, hmDecodeEntities, hmSerialize,
+  hmWidth, hmEscapeText, hmResolveUrl, HtmlToMarkdownToolError,
+} from './html-md.mjs';
+import {
   dateCalcTool, dcToDays, dcFromDays, dcWeekday, dcParseDate, dcRun,
   HOLIDAYS, DateCalcError, DateCalcToolError,
 } from './date-calc.mjs';
@@ -3802,6 +3806,183 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => dateCalcTool({ mode: 'add', base: '2026-09-01', n: 1, unit: 'fortnights' }), /unit/);
   assert.ok(new DateCalcToolError('x') instanceof Error);
   assert.ok(new DateCalcError('BAD_DATE', {}) instanceof Error);
+}
+
+// ==================== html_to_markdown ====================
+{
+  // --- 字句解析: 壊れたHTMLでも暴走しない ---
+  const t1 = hmTokenize('<p class="a">x</p>');
+  assert.deepEqual(t1.tokens.map((t) => t.type), ['start', 'text', 'end']);
+  assert.equal(t1.tokens[0].attrs.class, 'a');
+  assert.equal(t1.flags.unterminatedTag, false);
+  // 引用符が閉じていない属性はそこで打ち切る（残り全部を飲み込まない印を立てる）
+  const t2 = hmTokenize('<a href="x>text</a>');
+  assert.equal(t2.flags.unterminatedTag, true);
+  // 引用符なし属性・大文字タグ・自己閉じ
+  const t3 = hmTokenize('<IMG SRC=a.png alt=hi />');
+  assert.equal(t3.tokens[0].name, 'img');
+  assert.equal(t3.tokens[0].attrs.src, 'a.png');
+  assert.equal(t3.tokens[0].attrs.alt, 'hi');
+  // script の中身はタグとして読まない
+  const t4 = hmTokenize('<script>var a = "<p>x</p>";</script><p>real</p>');
+  assert.equal(t4.tokens.filter((t) => t.type === 'start' && t.name === 'p').length, 1);
+  // コメントの閉じ忘れ
+  assert.equal(hmTokenize('<p>a</p><!-- never closed').flags.unterminatedComment, true);
+
+  // --- 文字参照 ---
+  assert.equal(hmDecodeEntities('&lt;div&gt; &amp;amp; &#x3042;&#12356; &copy;'), '<div> &amp; あい ©');
+  assert.equal(hmDecodeEntities('&nbsp;'), ' ');
+  assert.equal(hmDecodeEntities('&#147;x&#148;'), '“x”'); // Windows-1252 として書かれた数値参照
+  // 「;」で終わらない既知の実体（&not）の最長一致はしない——見出しに &amp; を書き損ねた原稿で
+  // 意図しない置換が起きるより、文字のまま残す方が事故が少ないため
+  assert.equal(hmDecodeEntities('&notanentity;'), '&notanentity;');
+  assert.equal(hmDecodeEntities('&not;'), '¬');
+  assert.equal(hmDecodeEntities('a &#xZZ; b'), 'a &#xZZ; b');
+
+  // --- 木の組み立て（閉じ忘れ・閉じすぎ） ---
+  const p1 = hmParse('<ul><li>a<li>b</ul>');
+  assert.equal(p1.root.children[0].children.length, 2, 'li は次の li で閉じる');
+  const p2 = hmParse('<p>a<p>b');
+  assert.equal(p2.root.children.length, 2, 'p はブロックの開始で閉じる');
+  assert.ok(hmParse('</div></div>').flags.strayEnd === 2);
+  assert.ok(hmParse('<div><span>x').flags.unclosed >= 2);
+  assert.equal(hmSerialize(hmParse('<b class="x">y</b>').root.children[0]), '<b class="x">y</b>');
+
+  // --- 文字幅とエスケープ ---
+  assert.equal(hmWidth('和文'), 4);
+  assert.equal(hmWidth('ab'), 2);
+  assert.equal(hmEscapeText('2 * 3 [x]'), '2 \\* 3 \\[x\\]');
+  assert.equal(hmEscapeText('snake_case'), 'snake_case', '単語の途中の _ は残す');
+  assert.equal(hmEscapeText('_em_'), '\\_em\\_');
+  assert.equal(hmResolveUrl('/a', 'https://e.example/b/c'), 'https://e.example/a');
+  assert.equal(hmResolveUrl('#x', 'https://e.example/'), '#x', 'アンカーは触らない');
+  assert.equal(hmResolveUrl('https://z.example/', 'https://e.example/'), 'https://z.example/');
+
+  // --- 変換（ブロック） ---
+  assert.equal(hmToMarkdown('<h1>A</h1><h3>B</h3>').markdown, '# A\n\n### B\n');
+  assert.equal(hmToMarkdown('<h1>A</h1>', { headings: 'setext' }).markdown, 'A\n===\n');
+  assert.equal(hmToMarkdown('<p>a<br>b</p>').markdown, 'a  \nb\n');
+  assert.equal(hmToMarkdown('<p>a<br>b</p>', { br: 'backslash' }).markdown, 'a\\\nb\n');
+  assert.equal(hmToMarkdown('<ul><li>a</li><li>b<ul><li>c</li></ul></li></ul>').markdown,
+    '- a\n- b\n  - c\n');
+  assert.equal(hmToMarkdown('<ol start="3"><li>a</li><li>b</li></ol>').markdown, '3. a\n4. b\n');
+  assert.equal(hmToMarkdown('<blockquote><p>q</p></blockquote>').markdown, '> q\n');
+  assert.equal(hmToMarkdown('<pre><code class="language-js">x = 1;</code></pre>').markdown,
+    '```js\nx = 1;\n```\n');
+  assert.equal(hmToMarkdown('<pre><code>x</code></pre>', { codeBlock: 'indented' }).markdown, '    x\n');
+  assert.equal(hmToMarkdown('<p>a</p><hr><p>b</p>').markdown, 'a\n\n---\n\nb\n');
+  // フェンスを含むコードはフェンスを伸ばす
+  assert.ok(hmToMarkdown('<pre><code>```\nx\n```</code></pre>').markdown.startsWith('````\n'));
+
+  // --- 変換（インライン） ---
+  assert.equal(hmToMarkdown('<p><strong>a</strong> <em>b</em> <del>c</del> <code>d</code></p>').markdown,
+    '**a** *b* ~~c~~ `d`\n');
+  // 印の外へ空白を出す（段落の先頭は最後に trim されるので、残るのは後ろの空白だけ）
+  assert.equal(hmToMarkdown('<p><strong> a </strong>b</p>').markdown, '**a** b\n');
+  assert.equal(hmToMarkdown('<p><code>a`b</code></p>').markdown, '``a`b``\n');
+  assert.equal(hmToMarkdown('<p><a href="https://e.example/">link</a></p>').markdown,
+    '[link](https://e.example/)\n');
+  assert.equal(hmToMarkdown('<p><a href="https://e.example/">https://e.example/</a></p>').markdown,
+    '<https://e.example/>\n', '文字列がURLそのものなら自動リンク');
+  assert.equal(hmToMarkdown('<p><a href="/a b">x</a></p>').markdown, '[x](</a b>)\n');
+  assert.equal(hmToMarkdown('<p><img src="a.png" alt="b" title="t"></p>').markdown, '![b](a.png "t")\n');
+  assert.equal(hmToMarkdown('<p><img src="a.png" alt="b"></p>', { images: 'alt' }).markdown, 'b\n');
+  assert.equal(hmToMarkdown('<p><img src="a.png" alt="b"></p>', { images: 'drop' }).markdown, '');
+  assert.equal(hmToMarkdown('<p><a href="/x">t</a></p>', { links: 'strip' }).markdown, 't\n');
+  // 参照形式（同じ宛先は1つの番号を使い回す）
+  const ref = hmToMarkdown('<p><a href="https://e.example/1">a</a> <a href="https://e.example/1">b</a></p>',
+    { links: 'reference' });
+  assert.equal(ref.markdown, '[a][1] [b][1]\n\n[1]: https://e.example/1\n');
+  assert.equal(ref.refs.length, 1);
+  // javascript: のリンクは文字だけにする
+  assert.equal(hmToMarkdown('<p><a href="javascript:alert(1)">x</a></p>').markdown, 'x\n');
+
+  // --- 表 ---
+  const tb = hmToMarkdown('<table><tr><th>A</th><th align="right">B</th></tr>'
+    + '<tr><td>1</td><td align="right">22</td></tr></table>');
+  assert.equal(tb.markdown, '| A   | B   |\n| --- | --: |\n| 1   | 22  |\n');
+  assert.equal(hmToMarkdown('<table><tr><td>a|b</td></tr></table>').markdown.includes('a\\|b'), true);
+  // 見出しの無い表には空の見出し行が要る（GFMは省略できない）
+  assert.ok(hmToMarkdown('<table><tr><td>1</td></tr></table>').notes.some((n) => n.code === 'TABLE_NO_HEAD'));
+  // セルの中にリストがあるとGFMの表に収まらないのでHTMLのまま残す
+  const complex = hmToMarkdown('<table><tr><th>A</th></tr><tr><td><ul><li>x</li></ul></td></tr></table>');
+  assert.ok(complex.notes.some((n) => n.code === 'TABLE_COMPLEX'));
+  assert.ok(complex.markdown.startsWith('<table>'));
+  // colspan は空セルで埋めて指摘する
+  const span = hmToMarkdown('<table><tr><th>A</th><th>B</th></tr><tr><td colspan="2">x</td></tr></table>');
+  assert.ok(span.notes.some((n) => n.code === 'TABLE_SPAN'));
+  assert.equal(span.markdown.split('\n')[2], '| x   |     |');
+  // 全角を2桁で数えて桁を揃える
+  const wide = hmToMarkdown('<table><tr><th>名前</th><th>数</th></tr><tr><td>あ</td><td>1</td></tr></table>');
+  assert.equal(wide.markdown.split('\n')[0], '| 名前 | 数  |');
+  assert.equal(hmToMarkdown('<table><tr><th>A</th></tr></table>', { tables: 'html' }).markdown, '<table><tr><th>A</th></tr></table>\n');
+
+  // --- タスクリスト ---
+  const task = hmToMarkdown('<ul><li><input type="checkbox" checked> done</li><li><input type="checkbox"> todo</li></ul>');
+  assert.equal(task.markdown, '- [x] done\n- [ ] todo\n');
+  assert.equal(task.stats.tasks, 2);
+
+  // --- 捨てるもの・残すもの ---
+  const junk = hmToMarkdown('<script>var a=1;</script><style>p{}</style><!--c--><p hidden>h</p><p>keep</p>');
+  assert.equal(junk.markdown, 'keep\n');
+  assert.ok(junk.notes.some((n) => n.code === 'DROPPED_CODE'));
+  assert.ok(junk.notes.some((n) => n.code === 'HIDDEN_DROPPED'));
+  assert.ok(hmToMarkdown('<p><sup>1</sup></p>').markdown.includes('<sup>1</sup>'));
+  assert.equal(hmToMarkdown('<p><sup>1</sup>x</p>', { unknown: 'text' }).markdown, '1x\n');
+  assert.equal(hmToMarkdown('<p>a</p><iframe src="x"></iframe>', { unknown: 'drop' }).markdown, 'a\n');
+  // 本文だけ
+  const main = hmToMarkdown('<body><header>H</header><main><h1>T</h1></main><footer>F</footer></body>',
+    { mainOnly: true });
+  assert.equal(main.markdown, '# T\n');
+  assert.ok(main.notes.some((n) => n.code === 'MAIN_ONLY'));
+  // 相対URLはベースURLで直す
+  assert.equal(hmToMarkdown('<p><a href="/a">x</a></p>', { baseUrl: 'https://e.example/b/' }).markdown,
+    '[x](https://e.example/a)\n');
+  assert.ok(hmToMarkdown('<p><a href="/a">x</a></p>').notes.some((n) => n.code === 'RELATIVE_URL'));
+  // GFMを切ると取り消し線はHTMLのまま
+  assert.ok(hmToMarkdown('<p><del>x</del></p>', { gfm: false }).markdown.includes('<del>'));
+
+  // --- エスケープ（行頭のブロック記法） ---
+  assert.equal(hmToMarkdown('<p># not a heading</p>').markdown, '\\# not a heading\n');
+  assert.equal(hmToMarkdown('<p>1. not ordered</p>').markdown, '1\\. not ordered\n');
+  assert.equal(hmToMarkdown('<p>2 * 3</p>', { escape: false }).markdown, '2 * 3\n');
+
+  // --- 空と巨大 ---
+  assert.equal(hmToMarkdown('').markdown, '');
+  assert.equal(hmToMarkdown('   \n  ').markdown, '');
+  assert.equal(hmToMarkdown(null).markdown, '');
+  const big = hmToMarkdown('<ul>' + '<li>x</li>'.repeat(5000) + '</ul>');
+  assert.equal(big.markdown.split('\n').length, 5001);
+
+  // --- ツールの入口 ---
+  const tool = await htmlToMarkdownTool({ html: '<h1>見出し</h1><p><a href="/a">x</a></p>' });
+  assert.equal(tool.ok, true);
+  assert.equal(tool.markdown, '# 見出し\n\n[x](/a)\n');
+  assert.equal(tool.stats.headings, 1);
+  assert.equal(tool.stats.links, 1);
+  assert.equal(tool.options.gfm, true);
+  assert.ok(tool.notes[0].message.includes('相対パス'));
+  const toolEn = await htmlToMarkdownTool({ html: '<p><a href="/a">x</a></p>', lang: 'en' });
+  assert.ok(toolEn.notes[0].message.includes('relative path'));
+  await assert.rejects(() => htmlToMarkdownTool({}), HtmlToMarkdownToolError);
+  await assert.rejects(() => htmlToMarkdownTool({ html: '<p>a</p>', path: '/tmp/x.html' }), HtmlToMarkdownToolError);
+  await assert.rejects(() => htmlToMarkdownTool({ html: '<p>a</p>', links: 'nope' }), HtmlToMarkdownToolError);
+  await assert.rejects(() => htmlToMarkdownTool({ html: '<p>a</p>', lang: 'fr' }), HtmlToMarkdownToolError);
+  // ファイル入出力
+  const { readFile, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const tmpIn = join(tmpdir(), `firstch-html-md-in-${process.pid}.html`);
+  const tmpOut = join(tmpdir(), `firstch-html-md-out-${process.pid}.md`);
+  await writeFile(tmpIn, '<h2>from file</h2>', 'utf8');
+  const fileTool = await htmlToMarkdownTool({ path: tmpIn, outputPath: tmpOut });
+  assert.equal(fileTool.markdown, undefined, 'outputPath を渡したら本文は返さない');
+  assert.equal(fileTool.output, tmpOut);
+  assert.equal(await readFile(tmpOut, 'utf8'), '## from file\n');
+  await rm(tmpIn, { force: true });
+  await rm(tmpOut, { force: true });
+
+  console.log('html_to_markdown ok');
 }
 
 console.log('all tests passed');
