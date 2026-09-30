@@ -546,8 +546,10 @@ const warnText = (lang, w) => {
 
 /** 日本時間の今日（MCPサーバーのタイムゾーンに左右されない） */
 function todayJst() {
-  const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tokyo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  return p;
+  // 書式の文字列に頼らず部品で組み立てる（en-CA の ISO 風表記は ICU の版によって 10/1/2026 になる）
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Tokyo', year: 'numeric', month: 'numeric', day: 'numeric' }).formatToParts(new Date());
+  const get = (type) => Number(parts.find((x) => x.type === type).value);
+  return wkIso(get('year'), get('month'), get('day'));
 }
 
 /** wkConvert の結果に曜日・干支の表示名と指摘の文言を足す */
