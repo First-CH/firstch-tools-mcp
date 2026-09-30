@@ -34,6 +34,7 @@ import { csvConvertTool } from './csv-json.mjs';
 import { cidrCalcTool } from './cidr.mjs';
 import { dateCalcTool } from './date-calc.mjs';
 import { htmlToMarkdownTool } from './html-md.mjs';
+import { warekiConvertTool } from './wareki.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -1476,6 +1477,42 @@ server.registerTool(
   async (opts) => {
     await logUsage('html_to_markdown');
     return asText(await htmlToMarkdownTool(opts));
+  },
+);
+
+server.registerTool(
+  'wareki_convert',
+  {
+    title: '和暦 ⇄ 西暦変換・満年齢',
+    description:
+      '和暦（令和・平成・昭和・大正・明治）と西暦を相互に変換し、曜日と干支を返す（tools.first-ch.com/wareki/ と同一ロジック）。' +
+      '契約書・請求書・行政書類の日付表記の変換と検算に使う。' +
+      '`mode="convert"` は date（1件）か dates（配列・1000件まで）を受け、**西暦か和暦かを自動で見分ける**: ' +
+      '2026-10-01 / 2026/10/1 / 20261001 / 2026年10月1日 / 令和8年10月1日 / R8.10.1 / 令和八年十月一日 / ㋿8.10.1 / Reiwa 8 など。' +
+      '年だけ（1989・昭和64年）・年月だけ（2019-05）も変換でき、改元をまたぐときは両方の元号を返す。' +
+      '書き方は和暦（元年表記・曜日つき・漢数字）・略記（R8.10.1 / R08.10.01）・西暦・ISO 8601・英語を formats で返す。' +
+      '改元日は大正1912-07-30・昭和1926-12-25・平成1989-01-08・令和2019-05-01。' +
+      '**存在しない和暦（平成32年・平成31年5月1日・令和元年4月30日）も西暦へ直したうえで正しい和暦を notes で指摘**し、' +
+      '書き添えの曜日（（金）など）が実際と違えば WEEKDAY_MISMATCH を返す。' +
+      '**明治5年（1872年）以前は旧暦のため年単位でだけ換算する**（LUNAR_CALENDAR）。' +
+      '`mode="age"` は birth（和暦可）と reference（省略時は日本時間の今日）から満年齢（誕生日に1つ増える・2月29日生まれは平年だと3月1日）・' +
+      '年月日の内訳・数え年・次の誕生日と、小学校〜大学の入学・卒業の年（4月2日〜翌4月1日生まれが同学年・浪人なし）を返す。' +
+      '`mode="eras"` は元号一覧を返し、from_year / to_year を渡すと和暦・干支・満年齢の早見表も返す（500年分まで）。' +
+      '日付の書き方の誤りは ok:false と error.code で返す。日付は通算日の整数で扱うのでサーバーのタイムゾーンで1日ずれない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      mode: z.enum(['convert', 'age', 'eras']).optional().describe('処理の種類（省略時は birth があれば age、date/dates があれば convert、無ければ eras）'),
+      date: z.string().optional().describe('変換する日付1件（西暦でも和暦でも。例: 令和8年10月1日 / 2026-10-01 / R8.10.1 / 昭和60年）'),
+      dates: z.array(z.string()).optional().describe('一括変換する日付の配列（1000件まで。date より優先）'),
+      birth: z.string().optional().describe('mode=age の生年月日（和暦可）'),
+      reference: z.string().optional().describe('mode=age の基準日・mode=eras の年齢の基準（省略時は日本時間の今日）'),
+      from_year: z.number().int().optional().describe('mode=eras で早見表を作る最初の西暦年（1868〜）'),
+      to_year: z.number().int().optional().describe('mode=eras で早見表を作る最後の西暦年（省略時は基準日の年）'),
+      lang: z.enum(['ja', 'en']).optional().describe("曜日・干支の動物名・指摘事項の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('wareki_convert');
+    return asText(await warekiConvertTool(opts));
   },
 );
 

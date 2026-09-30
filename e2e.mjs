@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 33 registered tools, and `tools/call` actually executes handlers
+// returns all 34 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -88,6 +88,7 @@ try {
     'url_params',
     'user_agent_parse',
     'uuid_generate',
+    'wareki_convert',
     'webp_convert',
     'yaml_to_json',
     'zenkaku_convert',
@@ -660,6 +661,26 @@ try {
 
   const hmErr = await request('tools/call', { name: 'html_to_markdown', arguments: {} }, 95);
   assert.ok(hmErr.result?.isError, `html_to_markdown should reject an empty call: ${JSON.stringify(hmErr)}`);
+
+  // wareki_convert: 和暦→西暦・存在しない和暦の指摘・年齢・壊れた入力・壊れた引数
+  const wkOne = await callTool('wareki_convert', { date: '令和8年10月1日' }, 96);
+  assert.equal(wkOne.seireki?.iso, '2026-10-01', `wareki_convert conversion mismatch: ${JSON.stringify(wkOne.seireki)}`);
+  assert.equal(wkOne.weekday, '木', `wareki_convert weekday mismatch: ${JSON.stringify(wkOne.weekday)}`);
+
+  const wkH32 = await callTool('wareki_convert', { dates: ['H32.4.1', '1989-01-08'], lang: 'en' }, 97);
+  assert.equal(wkH32.results?.[0]?.notes?.[0]?.code, 'ERA_ENDED', `wareki_convert should flag Heisei 32: ${JSON.stringify(wkH32.results?.[0])}`);
+  assert.equal(wkH32.results?.[1]?.wareki?.[0]?.formats?.full, '平成元年1月8日', `wareki_convert boundary mismatch: ${JSON.stringify(wkH32.results?.[1])}`);
+
+  const wkAgeRes = await callTool('wareki_convert', { birth: '昭和60年4月2日', reference: '2026-10-01' }, 98);
+  assert.equal(wkAgeRes.age, 41, `wareki_convert age mismatch: ${JSON.stringify(wkAgeRes.age)}`);
+  assert.equal(wkAgeRes.school?.[0]?.wareki, '平成4年4月', `wareki_convert school mismatch: ${JSON.stringify(wkAgeRes.school)}`);
+
+  const wkBad = await callTool('wareki_convert', { date: '2026-02-30' }, 99);
+  assert.equal(wkBad.ok, false, `wareki_convert should report a bad date: ${JSON.stringify(wkBad)}`);
+  assert.equal(wkBad.error?.code, 'NO_SUCH_DATE', `wareki_convert error code mismatch: ${JSON.stringify(wkBad.error)}`);
+
+  const wkErr = await request('tools/call', { name: 'wareki_convert', arguments: { mode: 'age' } }, 100);
+  assert.ok(wkErr.result?.isError, `wareki_convert should reject age without birth: ${JSON.stringify(wkErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();

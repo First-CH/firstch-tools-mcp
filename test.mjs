@@ -69,6 +69,10 @@ import {
   hmWidth, hmEscapeText, hmResolveUrl, HtmlToMarkdownToolError,
 } from './html-md.mjs';
 import {
+  warekiConvertTool, wkParse, wkConvert, wkAge, wkEraList, wkYearTable, wkEto, wkKanjiNum, wkKanjiToInt,
+  wkToDays, wkFromDays, wkIso, WK_ERAS, WarekiError, WarekiToolError,
+} from './wareki.mjs';
+import {
   dateCalcTool, dcToDays, dcFromDays, dcWeekday, dcParseDate, dcRun,
   HOLIDAYS, DateCalcError, DateCalcToolError,
 } from './date-calc.mjs';
@@ -3983,6 +3987,227 @@ assert.equal(over.x_postable, false);
   await rm(tmpOut, { force: true });
 
   console.log('html_to_markdown ok');
+}
+
+// ==================== wareki_convert ====================
+{
+  const full = (t) => wkConvert(wkParse(t)).wareki.map((w) => w.formats.full).join('|');
+  const codes = (t) => wkConvert(wkParse(t)).warnings.map((w) => w.code);
+  const errCode = (t) => { try { wkParse(t); return null; } catch (e) { assert.ok(e instanceof WarekiError); return e.code; } };
+
+  // --- 読み取り: 西暦/和暦の自動判定・書き方の揺れ ---
+  for (const t of ['2026-10-01', '2026/10/1', '20261001', '2026年10月1日', '2026.10.01', '西暦2026年10月1日',
+    '令和8年10月1日', 'R8.10.1', 'r08/10/01', '令8.10.1', '令和八年十月一日', '二〇二六年十月一日', '令和８年１０月１日',
+    '㋿8.10.1', 'Reiwa 8.10.1', '令和 8 年 10 月 1 日', '令和8年10月1日（木）', '2026-10-01 Thu', '令和8年10月1日木曜日']) {
+    const r = wkConvert(wkParse(t));
+    assert.equal(r.seireki.iso, '2026-10-01', t);
+    assert.equal(r.wareki[0].formats.full, '令和8年10月1日', t);
+    assert.equal(r.weekday, 4, t);
+    assert.deepEqual(r.warnings, [], t);
+  }
+  assert.equal(wkParse('令和8年10月1日').source, 'wareki');
+  assert.equal(wkParse('2026/10/1').source, 'seireki');
+  assert.equal(wkParse('昭和60年4月2日生まれ').day, 2);
+
+  // --- 書き方の一覧 ---
+  const f = wkConvert(wkParse('2019-05-01')).wareki[0].formats;
+  assert.equal(f.full, '令和元年5月1日');
+  assert.equal(f.full_wd, '令和元年5月1日（水）');
+  assert.equal(f.kanji, '令和元年五月一日');
+  assert.equal(f.abbr, 'R1.5.1');
+  assert.equal(f.abbr_pad, 'R01.05.01');
+  assert.equal(f.en, 'May 1, Reiwa 1 (2019)');
+  const sf = wkConvert(wkParse('2026-10-01')).seireki.formats;
+  assert.equal(sf.kanji, '二〇二六年十月一日');
+  assert.equal(sf.en, 'Thursday, October 1, 2026');
+  assert.equal(wkConvert(wkParse('S64.1.7')).wareki[0].formats.kanji, '昭和六十四年一月七日');
+  assert.equal(wkConvert(wkParse('H31.12.31')).seireki.iso, '2019-12-31');
+
+  // --- 改元の境目 ---
+  assert.equal(full('1912-07-29'), '明治45年7月29日');
+  assert.equal(full('1912-07-30'), '大正元年7月30日');
+  assert.equal(full('1926-12-24'), '大正15年12月24日');
+  assert.equal(full('1926-12-25'), '昭和元年12月25日');
+  assert.equal(full('1989-01-07'), '昭和64年1月7日');
+  assert.equal(full('1989-01-08'), '平成元年1月8日');
+  assert.equal(full('2019-04-30'), '平成31年4月30日');
+  assert.equal(full('2019-05-01'), '令和元年5月1日');
+  // 年だけ・年月だけで改元をまたぐと両方を返す
+  assert.equal(full('1989'), '昭和64年|平成元年');
+  assert.deepEqual(codes('1989'), ['ERA_BOUNDARY']);
+  const y89 = wkConvert(wkParse('1989')).wareki;
+  assert.equal(y89[0].to, '1989-01-07');
+  assert.equal(y89[1].from, '1989-01-08');
+  assert.equal(full('2019-04'), '平成31年4月');
+  assert.equal(full('2019-05'), '令和元年5月');
+  assert.equal(full('1912-07'), '明治45年7月|大正元年7月');
+  assert.equal(full('大正元年'), '明治45年|大正元年');
+
+  // --- 存在しない和暦は直して指摘する ---
+  const h32 = wkConvert(wkParse('平成32年4月1日'));
+  assert.equal(h32.seireki.iso, '2020-04-01');
+  assert.equal(h32.warnings[0].code, 'ERA_ENDED');
+  assert.deepEqual(h32.warnings[0].correct, ['令和2年4月1日']);
+  assert.deepEqual(codes('平成31年5月1日'), ['ERA_ENDED']);
+  assert.deepEqual(codes('令和元年4月30日'), ['ERA_NOT_STARTED']);
+  assert.deepEqual(codes('昭和64年1月8日'), ['ERA_ENDED']);
+  assert.deepEqual(codes('平成31年4月30日'), []);
+  assert.deepEqual(codes('平成31年'), ['ERA_BOUNDARY']);
+  assert.deepEqual(codes('2026年10月1日（金）'), ['WEEKDAY_MISMATCH']);
+
+  // --- 改暦前は年単位 ---
+  const m3 = wkConvert(wkParse('明治3年5月1日'));
+  assert.equal(m3.precision, 'year');
+  assert.equal(m3.seireki.year, 1870);
+  assert.deepEqual(m3.warnings.map((w) => w.code), ['LUNAR_CALENDAR']);
+  assert.equal(full('1872-12-31'), '明治5年');
+  assert.equal(full('1873-01-01'), '明治6年1月1日');
+  assert.equal(full('1868'), '明治元年');
+
+  // --- 壊れた入力 ---
+  assert.equal(errCode(''), 'EMPTY');
+  assert.equal(errCode('   '), 'EMPTY');
+  assert.equal(errCode('abc'), 'UNREADABLE');
+  assert.equal(errCode('8年10月1日'), 'NEED_ERA');
+  assert.equal(errCode('26/10/1'), 'NEED_ERA');
+  assert.equal(errCode('慶応3年'), 'UNKNOWN_ERA');
+  assert.equal(errCode('R0.1.1'), 'ERA_YEAR_ZERO');
+  assert.equal(errCode('1867-12-31'), 'OUT_OF_RANGE');
+  assert.equal(errCode('2026-02-29'), 'NO_SUCH_DATE');
+  assert.equal(errCode('2026-13-01'), 'NO_SUCH_DATE');
+  assert.equal(errCode('2024-02-29'), null);
+  assert.equal(errCode('2100-02-29'), 'NO_SUCH_DATE');
+  assert.equal(errCode('2000-02-29'), null);
+
+  // --- 漢数字・干支 ---
+  assert.equal(wkKanjiNum(31), '三十一');
+  assert.equal(wkKanjiNum(10), '十');
+  assert.equal(wkKanjiNum(64), '六十四');
+  assert.equal(wkKanjiToInt('二十一'), 21);
+  assert.equal(wkKanjiToInt('二〇二六'), 2026);
+  assert.equal(wkKanjiToInt('千九百八十五'), 1985);
+  assert.equal(wkEto(1984).kanji, '甲子');
+  assert.equal(wkEto(2026).kanji, '丙午');
+  assert.equal(wkEto(2026).kana, 'ひのえうま');
+  assert.equal(wkEto(1985).animal_ja, 'うし');
+  assert.equal(wkEto(1868).kanji, '戊辰');
+
+  // --- 独立したオラクル（ICUの和暦）と1873年〜2100年の全日で突き合わせる ---
+  const icu = new Intl.DateTimeFormat('ja-JP-u-ca-japanese', { era: 'long', year: 'numeric', month: 'numeric', day: 'numeric', timeZone: 'UTC' });
+  let mismatch = 0;
+  for (let z = wkToDays(1873, 1, 1), end = wkToDays(2100, 12, 31); z <= end; z++) {
+    const c = wkFromDays(z);
+    const r = wkConvert(wkParse(wkIso(c.y, c.m, c.d)));
+    const mine = r.wareki[0].formats.full.replace('元年', '1年');
+    const theirs = icu.format(new Date(z * 86400000)).replace(/\s/g, '').replace(/^(\D+)(\d+)\/(\d+)\/(\d+)$/, '$1$2年$3月$4日').replace('元年', '1年');
+    const back = wkConvert(wkParse(r.wareki[0].formats.abbr));
+    if (mine !== theirs || back.seireki.iso !== r.seireki.iso || back.warnings.length || r.weekday !== new Date(z * 86400000).getUTCDay()) mismatch++;
+  }
+  assert.equal(mismatch, 0, 'ICUの和暦と一致しない日がある');
+
+  // --- 年齢 ---
+  const age = (b, r) => wkAge(wkParse(b), wkParse(r));
+  const a1 = age('昭和60年4月2日', '2026-10-01');
+  assert.equal(a1.age, 41);
+  assert.equal(a1.months, 5);
+  assert.equal(a1.days, 29);
+  assert.equal(a1.kazoe, 42);
+  assert.equal(a1.next_birthday.date, '2027-04-02');
+  assert.equal(a1.next_birthday.days_until, 183);
+  assert.equal(a1.school[0].wareki, '平成4年4月');
+  assert.equal(a1.school[7].seireki, '2008年3月');
+  assert.equal(age('1985-04-02', '2026-04-01').age, 40);
+  assert.equal(age('1985-04-02', '2026-04-02').age, 41);
+  assert.equal(age('1985-04-02', '2026-04-02').is_birthday, true);
+  // 2月29日生まれは平年だと3月1日に年を取る
+  assert.equal(age('2000-02-29', '2027-02-28').age, 26);
+  assert.equal(age('2000-02-29', '2027-03-01').age, 27);
+  assert.equal(age('2000-02-29', '2028-02-29').age, 28);
+  assert.equal(age('2000-02-29', '2027-02-28').next_birthday.date, '2027-03-01');
+  // 4月1日生まれは早生まれ（前の学年）・4月2日生まれは次の学年
+  assert.equal(age('2019-04-01', '2026-10-01').school[0].year, 2025);
+  assert.equal(age('2019-04-02', '2026-10-01').school[0].year, 2026);
+  // 6-3-3制より前の世代には学歴の年を出さない
+  assert.equal(age('1930-05-05', '2026-10-01').school, null);
+  // 月末生まれの内訳（該当日が無い月は翌月1日で満了）
+  const a31 = age('2000-01-31', '2000-03-01');
+  assert.equal(a31.months, 1);
+  assert.equal(a31.days, 0);
+  // 満年齢を素朴な式と突き合わせる
+  for (let i = 0; i < 3000; i++) {
+    const bz = wkToDays(1900, 1, 1) + ((i * 7919) % 40000);
+    const rz = bz + ((i * 104729) % 30000);
+    const b = wkFromDays(bz);
+    const r = wkFromDays(rz);
+    let naive = r.y - b.y - ((r.m < b.m || (r.m === b.m && r.d < b.d)) ? 1 : 0);
+    const a = wkAge(wkParse(wkIso(b.y, b.m, b.d)), wkParse(wkIso(r.y, r.m, r.d)));
+    assert.equal(a.age, naive, `${wkIso(b.y, b.m, b.d)} ${wkIso(r.y, r.m, r.d)}`);
+    assert.equal(a.days_lived, rz - bz);
+  }
+  const ageErr = (b, r) => { try { age(b, r); return null; } catch (e) { return e.code; } };
+  assert.equal(ageErr('1985', '2026-10-01'), 'NEED_FULL_DATE');
+  assert.equal(ageErr('2027-01-01', '2026-10-01'), 'REF_BEFORE_BIRTH');
+  assert.equal(ageErr('1870-01-01', '2026-10-01'), 'LUNAR_BIRTH');
+
+  // --- 元号一覧・早見表 ---
+  const eras = wkEraList(wkToDays(2026, 10, 1));
+  assert.deepEqual(eras.map((e) => e.years), [45, 15, 64, 31, 8]);
+  assert.deepEqual(eras.map((e) => e.offset), [1867, 1911, 1925, 1988, 2018]);
+  assert.equal(eras[4].current, true);
+  assert.equal(WK_ERAS.length, 5);
+  const yt = wkYearTable(2018, 2020, 2026);
+  assert.deepEqual(yt.map((r) => r.year), [2020, 2019, 2018]);
+  assert.deepEqual(yt[1].wareki.map((w) => w.text), ['平成31年', '令和元年']);
+  assert.equal(yt[0].age, 6);
+  assert.equal(yt[0].age_before_birthday, 5);
+  assert.equal(wkYearTable(2026, 2026, 2026)[0].age_before_birthday, null);
+
+  // --- MCPツール層 ---
+  const one = await warekiConvertTool({ date: 'R8.10.1' });
+  assert.equal(one.ok, true);
+  assert.equal(one.mode, 'convert');
+  assert.equal(one.detected, 'wareki');
+  assert.equal(one.seireki.iso, '2026-10-01');
+  assert.equal(one.weekday, '木');
+  assert.equal(one.notes, undefined);
+  const oneEn = await warekiConvertTool({ date: '平成32年', lang: 'en' });
+  assert.equal(oneEn.notes[0].code, 'ERA_ENDED');
+  assert.match(oneEn.notes[0].message, /Reiwa 2/);
+  const bad = await warekiConvertTool({ date: '2026-02-30' });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error.code, 'NO_SUCH_DATE');
+  assert.match(bad.error.message, /存在しない/);
+  const many = await warekiConvertTool({ dates: ['2026-10-01', 'x', '昭和64年1月7日'] });
+  assert.equal(many.count, 3);
+  assert.equal(many.errors, 1);
+  assert.equal(many.ok, false);
+  assert.equal(many.results[2].wareki[0].formats.full, '昭和64年1月7日');
+  const ag = await warekiConvertTool({ birth: '昭和60年4月2日', reference: '2026-10-01', lang: 'en' });
+  assert.equal(ag.mode, 'age');
+  assert.equal(ag.age, 41);
+  assert.equal(ag.next_birthday.weekday, 'Friday');
+  assert.equal(ag.school[0].event, 'Elementary school entry');
+  const agToday = await warekiConvertTool({ birth: '1985-04-02' });
+  assert.equal(agToday.reference_is_today, true);
+  assert.match(agToday.reference, /^\d{4}-\d{2}-\d{2}$/);
+  const er = await warekiConvertTool({ mode: 'eras', reference: '2026-10-01', from_year: 1988, to_year: 1990 });
+  assert.equal(er.eras.length, 5);
+  assert.equal(er.year_table.length, 3);
+  assert.equal(er.year_table[1].wareki, '昭和64年 / 平成元年');
+  assert.equal(er.year_table[1].age, 37);
+  const noArgs = await warekiConvertTool({});
+  assert.equal(noArgs.mode, 'eras');
+  assert.equal(noArgs.year_table, undefined);
+  await assert.rejects(() => warekiConvertTool({ mode: 'convert' }), WarekiToolError);
+  await assert.rejects(() => warekiConvertTool({ mode: 'age' }), WarekiToolError);
+  await assert.rejects(() => warekiConvertTool({ mode: 'x' }), WarekiToolError);
+  await assert.rejects(() => warekiConvertTool({ date: 'R8', lang: 'fr' }), WarekiToolError);
+  await assert.rejects(() => warekiConvertTool({ dates: [] }), WarekiToolError);
+  await assert.rejects(() => warekiConvertTool({ dates: new Array(1001).fill('2026') }), WarekiToolError);
+  await assert.rejects(() => warekiConvertTool({ mode: 'eras', from_year: 1800 }), WarekiToolError);
+  await assert.rejects(() => warekiConvertTool({ mode: 'eras', from_year: 1868, to_year: 2500 }), WarekiToolError);
+
+  console.log('wareki_convert ok');
 }
 
 console.log('all tests passed');
