@@ -72,6 +72,7 @@ import {
   warekiConvertTool, wkParse, wkConvert, wkAge, wkEraList, wkYearTable, wkEto, wkKanjiNum, wkKanjiToInt,
   wkToDays, wkFromDays, wkIso, WK_ERAS, WarekiError, WarekiToolError,
 } from './wareki.mjs';
+import { slugGenerateTool, slugGenerate, kanaToRomaji, slugTokens, SlugToolError } from './slug.mjs';
 import {
   dateCalcTool, dcToDays, dcFromDays, dcWeekday, dcParseDate, dcRun,
   HOLIDAYS, DateCalcError, DateCalcToolError,
@@ -4208,6 +4209,89 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => warekiConvertTool({ mode: 'eras', from_year: 1868, to_year: 2500 }), WarekiToolError);
 
   console.log('wareki_convert ok');
+}
+
+// ==================== slug_generate ====================
+{
+  // ヘボン式の基本・拗音・促音・撥音・外来音
+  const hep = {
+    'しんじゅく': 'shinjuku', 'ちば': 'chiba', 'つくば': 'tsukuba', 'ふじ': 'fuji', 'ぢ': 'ji', 'づ': 'zu',
+    'しゃしん': 'shashin', 'ちゃわん': 'chawan', 'じゃま': 'jama', 'りょかん': 'ryokan', 'ぎゅうにゅう': 'gyunyu',
+    'きって': 'kitte', 'まっちゃ': 'matcha', 'ざっし': 'zasshi', 'あっ': 'a', 'しんぶん': 'shinbun', 'きんえん': 'kinen',
+    'ファイル': 'fairu', 'ティー': 'ti', 'ディズニー': 'dizuni', 'ヴァイオリン': 'vaiorin', 'ウェブ': 'webu', 'シェア': 'shea',
+    'チェック': 'chekku', 'ジェット': 'jetto', 'ツァー': 'tsa', 'ヷ': 'va', 'を': 'o', 'ゐ': 'i', 'ゑ': 'e',
+  };
+  for (const [k, v] of Object.entries(hep)) assert.equal(kanaToRomaji(k, 'omit'), v, k);
+  // 長音: 省く（おう・おお・うう・ー）／書く。えい・いい は残す
+  const lv = [['とうきょう', 'tokyo', 'toukyou'], ['おおさか', 'osaka', 'oosaka'], ['ラーメン', 'ramen', 'raamen'],
+    ['くうき', 'kuki', 'kuuki'], ['せんせい', 'sensei', 'sensei'], ['いいね', 'iine', 'iine'], ['コーヒー', 'kohi', 'koohii']];
+  for (const [k, omit, keep] of lv) {
+    assert.equal(kanaToRomaji(k, 'omit'), omit, k);
+    assert.equal(kanaToRomaji(k, 'keep'), keep, k);
+  }
+  // 半角カナ・踊り字・全角英数・アクセント・アポストロフィ
+  const sg = (title, o) => slugGenerate({ title, ...o }).slug;
+  assert.equal(sg('ｶﾞｯｺｳ'), 'gakko');
+  assert.equal(sg('いすゞ こゝろ'), 'isuzu-kokoro');
+  assert.equal(sg('ＡＢＣ１２３'), 'abc123');
+  assert.equal(sg('Café & Crème Brûlée'), 'cafe-creme-brulee');
+  assert.equal(sg("Don't Stop"), 'dont-stop');
+  assert.equal(sg('ラーメン10選'), 'ramen-10');
+  assert.equal(sg('ラーメン10せん'), 'ramen-10-sen');
+  assert.equal(sg('ラーメンを たべた'), 'ramen-o-tabeta');
+  assert.equal(sg('ラーメンを たべた', { splitKatakana: false }), 'rameno-tabeta');
+  assert.equal(sg('ーーおしらせーー'), 'oshirase');
+  // 漢字は飛ばして指摘・読みがあれば読みから
+  const k = slugGenerate({ title: '東京のラーメン' });
+  assert.equal(k.slug, 'no-ramen');
+  assert.deepEqual(k.kanji, ['東', '京']);
+  assert.equal(k.notes[0].code, 'KANJI');
+  const r = slugGenerate({ title: '東京のラーメン', reading: 'とうきょう の ラーメン', separator: 'snake' });
+  assert.equal(r.slug, 'tokyo_no_ramen');
+  assert.equal(r.source, 'reading');
+  assert.deepEqual(r.notes, []);
+  // 上限は語の切れ目・1語だけで超えるなら語の中で
+  assert.equal(sg('とうきょう で たべた ラーメン', { maxLength: 15 }), 'tokyo-de-tabeta');
+  assert.equal(sg('とうきょうとっきょきょかきょく', { maxLength: 10 }), 'tokyotokky');
+  // 数字だけ・長すぎ・空・ローマ字にできない
+  assert.ok(slugGenerate({ title: '2026' }).notes.some((n) => n.code === 'NUMERIC'));
+  assert.ok(slugGenerate({ title: 'あ'.repeat(70) }).notes.some((n) => n.code === 'LONG'));
+  assert.equal(slugGenerate({ title: '' }).notes[0].code, 'EMPTY');
+  assert.equal(slugGenerate({ title: '漢字' }).notes[0].code, 'NO_SLUG');
+  assert.deepEqual(slugGenerate({ title: '한국어 テスト' }).other, ['한', '국', '어']);
+  // 出力はいつも [a-z0-9] と区切りだけ（ひらがな・カタカナ全字と記号を流しても）
+  let all = '';
+  for (let c = 0x3041; c <= 0x30ff; c += 1) all += String.fromCharCode(c);
+  for (const sep of ['kebab', 'snake']) {
+    for (const longVowel of ['omit', 'keep']) {
+      const out = slugGenerate({ title: all + ' !?#%&/\\「」【】…', separator: sep, longVowel }).slug;
+      assert.match(out, sep === 'kebab' ? /^[a-z0-9]+(-[a-z0-9]+)*$/ : /^[a-z0-9]+(_[a-z0-9]+)*$/);
+    }
+  }
+  assert.deepEqual(slugTokens('あア1', true).words.map((w) => w.type), ['kana', 'kana', 'alnum']);
+
+  // ツールのラッパー
+  const one = await slugGenerateTool({ title: '東京で食べたラーメン10選', reading: 'とうきょう で たべた ラーメン 10せん' });
+  assert.equal(one.slug, 'tokyo-de-tabeta-ramen-10-sen');
+  assert.equal(one.variants.snake_keep, 'toukyou_de_tabeta_raamen_10_sen');
+  assert.equal(one.words.length, 6);
+  const en = await slugGenerateTool({ title: '東京', lang: 'en' });
+  assert.equal(en.notes[0].code, 'NO_SLUG');
+  assert.match(en.notes[1].message, /Kanji are left out/);
+  const many = await slugGenerateTool({ items: ['まっちゃ', { reading: 'まっちゃ' }, { title: 'SEO対策', reading: 'SEO たいさく' }] });
+  assert.equal(many.count, 3);
+  assert.equal(many.results[2].slug, 'seo-taisaku');
+  assert.equal(many.notes[0].code, 'DUPLICATE');
+  await assert.rejects(() => slugGenerateTool({}), SlugToolError);
+  await assert.rejects(() => slugGenerateTool({ title: 'a', separator: 'dot' }), SlugToolError);
+  await assert.rejects(() => slugGenerateTool({ title: 'a', longVowel: 'x' }), SlugToolError);
+  await assert.rejects(() => slugGenerateTool({ title: 'a', maxLength: 201 }), SlugToolError);
+  await assert.rejects(() => slugGenerateTool({ title: 'a', lang: 'fr' }), SlugToolError);
+  await assert.rejects(() => slugGenerateTool({ items: [] }), SlugToolError);
+  await assert.rejects(() => slugGenerateTool({ items: ['a'], title: 'b' }), SlugToolError);
+  await assert.rejects(() => slugGenerateTool({ items: new Array(1001).fill('a') }), SlugToolError);
+
+  console.log('slug_generate ok');
 }
 
 console.log('all tests passed');

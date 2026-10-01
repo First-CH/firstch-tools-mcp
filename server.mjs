@@ -35,6 +35,7 @@ import { cidrCalcTool } from './cidr.mjs';
 import { dateCalcTool } from './date-calc.mjs';
 import { htmlToMarkdownTool } from './html-md.mjs';
 import { warekiConvertTool } from './wareki.mjs';
+import { slugGenerateTool } from './slug.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
@@ -1513,6 +1514,42 @@ server.registerTool(
   async (opts) => {
     await logUsage('wareki_convert');
     return asText(await warekiConvertTool(opts));
+  },
+);
+
+server.registerTool(
+  'slug_generate',
+  {
+    title: 'URLスラッグ生成（日本語タイトル→ローマ字）',
+    description:
+      '日本語の記事タイトルから WordPress 等の URL スラッグを作る（tools.first-ch.com/slug/ と同一ロジック）。' +
+      'かなをヘボン式ローマ字にし（し→shi・ち→chi・つ→tsu・ふ→fu・じ→ji・しゃ→sha・促音は子音を重ねて kitte／ch の前は matcha・ん は常に n・ファ→fa・ティ→ti・ヴァ→va）、' +
+      '記号を除いてハイフン（separator="snake" ならアンダースコア）でつなぎ、小文字にする。結果は a-z・0-9・区切り文字だけ。' +
+      '**漢字の読みは推定しない**: reading にかなで読みを渡すと、title の代わりに reading から作る（読みは呼び出し側＝AIが決める）。' +
+      'reading の空白は区切りになるので語の切れ目で空ける（"とうきょう で たべた ラーメン 10せん" → tokyo-de-tabeta-ramen-10-sen）。' +
+      'reading なしで漢字が残ると漢字を飛ばして作り、飛ばした字を skipped と notes(KANJI) で返す。' +
+      '区切りは空白・記号・漢字・かな⇄英数字の切り替わり（splitKatakana=true〔既定〕ならひらがな⇄カタカナの切り替わりも）。' +
+      'longVowel="omit"（既定）は「おう・おお・うう」と長音記号ーを1字にする（とうきょう→tokyo・ラーメン→ramen。えい・いい は残す）、"keep" は toukyou・raamen。' +
+      '助詞の は・へ・を は字のとおり ha・he・o。半角カナ・全角英数字はそろえ、アクセント記号は外す（Café→cafe）。' +
+      'maxLength で上限（語の切れ目で切る）。数字だけのスラッグ（日付アーカイブと衝突し WordPress が -2 を付けうる）と60文字超を notes で指摘。' +
+      '区切り×長音の4通りを variants で返す。items で1000件までまとめて作れ、同じスラッグになる項目を DUPLICATE で指摘する。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      title: z.string().optional().describe('記事・ページのタイトル（items と排他）'),
+      reading: z.string().optional().describe('読み（漢字をかなに直したもの。空白が区切りになる）。渡すと title の代わりにこちらから作る'),
+      items: z
+        .array(z.union([z.string(), z.object({ title: z.string().optional(), reading: z.string().optional() })]))
+        .optional()
+        .describe('まとめて作る（1000件まで）。文字列か {title, reading}'),
+      separator: z.enum(['kebab', 'snake']).optional().describe("区切り（既定 'kebab'＝ハイフン / 'snake'＝アンダースコア）"),
+      longVowel: z.enum(['omit', 'keep']).optional().describe("長音（既定 'omit'＝tokyo / 'keep'＝toukyou）"),
+      maxLength: z.number().int().optional().describe('文字数の上限（0〜200・既定 0＝無制限）。語の切れ目で切る'),
+      splitKatakana: z.boolean().optional().describe('ひらがなとカタカナの境目でも区切る（既定 true）'),
+      lang: z.enum(['ja', 'en']).optional().describe("指摘事項の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('slug_generate');
+    return asText(await slugGenerateTool(opts));
   },
 );
 

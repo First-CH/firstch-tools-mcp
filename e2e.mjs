@@ -4,7 +4,7 @@
 // returns all 34 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert / slug_generate) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -82,6 +82,7 @@ try {
     'px_rem_convert',
     'qr_generate',
     'robotstxt_generate',
+    'slug_generate',
     'sql_format',
     'testdata_generate',
     'unixtime_convert',
@@ -681,6 +682,21 @@ try {
 
   const wkErr = await request('tools/call', { name: 'wareki_convert', arguments: { mode: 'age' } }, 100);
   assert.ok(wkErr.result?.isError, `wareki_convert should reject age without birth: ${JSON.stringify(wkErr)}`);
+
+  // slug_generate: 読みからのスラッグ・漢字の取りこぼし・一括と衝突・壊れた引数
+  const sgOne = await callTool('slug_generate', { title: '東京で食べたラーメン10選', reading: 'とうきょう で たべた ラーメン 10せん' }, 101);
+  assert.equal(sgOne.slug, 'tokyo-de-tabeta-ramen-10-sen', `slug_generate slug mismatch: ${JSON.stringify(sgOne.slug)}`);
+  assert.equal(sgOne.variants?.snake_keep, 'toukyou_de_tabeta_raamen_10_sen', `slug_generate variants mismatch: ${JSON.stringify(sgOne.variants)}`);
+
+  const sgKanji = await callTool('slug_generate', { title: '東京のラーメン' }, 102);
+  assert.equal(sgKanji.notes?.[0]?.code, 'KANJI', `slug_generate should flag kanji: ${JSON.stringify(sgKanji.notes)}`);
+
+  const sgMany = await callTool('slug_generate', { items: ['まっちゃ', { reading: 'まっちゃ' }], separator: 'snake', lang: 'en' }, 103);
+  assert.equal(sgMany.results?.[1]?.slug, 'matcha', `slug_generate batch mismatch: ${JSON.stringify(sgMany.results)}`);
+  assert.equal(sgMany.notes?.[0]?.code, 'DUPLICATE', `slug_generate should flag duplicates: ${JSON.stringify(sgMany.notes)}`);
+
+  const sgErr = await request('tools/call', { name: 'slug_generate', arguments: { title: 'a', maxLength: 500 } }, 104);
+  assert.ok(sgErr.result?.isError, `slug_generate should reject maxLength 500: ${JSON.stringify(sgErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();
