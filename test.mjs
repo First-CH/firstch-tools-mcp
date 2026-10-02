@@ -375,7 +375,7 @@ assert.equal(over.x_postable, false);
 // ---- .xlsx 書き出し（testdata_generate format=xlsx） ----
 {
   const { generateTestData, buildXlsx, generateRecords, FIELDS } = await import('./testdata.mjs');
-  // node:zlib の crc32 は Node 20.15 / 22.2 以降にしか無い。engines の下限は 18.14.1 なので、
+  // node:zlib の crc32 は Node 20.15 / 22.2 以降にしか無い。engines の下限は 24 だが、
   // 無い環境ではCRCの照合だけ飛ばす（ZIP構造・中身の検査は下で従来どおり行う）。
   // 自前の crc32 を借りて突き合わせても、同じ実装どうしの比較になり検査の意味が無いため代替にしない。
   const { crc32 } = await import('node:zlib');

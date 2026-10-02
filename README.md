@@ -8,7 +8,7 @@ MCP server exposing [First CH Tools](https://tools.first-ch.com)' free web-tool 
 
 Three ways to add this server, pick whichever fits your client.
 
-**Requires Node.js `>=18.14.1`** (all three methods below run the server via `npx`, so Node must be installed even when the MCP client itself — e.g. Claude Code's native, no-Node install — doesn't strictly require it).
+**Requires Node.js `>=24`** (all three methods below run the server via `npx`, so Node must be installed even when the MCP client itself — e.g. Claude Code's native, no-Node install — doesn't strictly require it).
 
 ### 1. npm, via the Claude Code CLI
 
@@ -118,7 +118,7 @@ npm test        # unit tests (lib.mjs / webp.mjs / marp.mjs / testdata.mjs / dif
 node e2e.mjs     # stdio smoke test: spawns server.mjs, lists tools, calls a couple of handlers
 ```
 
-CI runs both across Node 18.14.1 / 20 / 22, plus a vendor checksum check and a published-tarball content check — see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
+CI runs both on Node 24, plus a vendor checksum check and a published-tarball content check — see [`.github/workflows/ci.yml`](./.github/workflows/ci.yml).
 
 Release rule: a push to `main` automatically publishes a new package version through npm Trusted Publishing (OIDC) after every CI gate passes. No `NPM_TOKEN`, `npm login`, OTP, or manual approval is used. The workflow verifies npm propagation and creates the matching `vX.Y.Z` tag. Package changes must bump every synchronized version field; if a version already exists with different package contents, CI fails instead of overwriting it. CI-only changes with identical package contents safely skip publishing.
 
@@ -132,7 +132,7 @@ Release rule: a push to `main` automatically publishes a new package version thr
 
 導入経路は3通りあります。使っているクライアントに合わせて選んでください。
 
-**Node.js `>=18.14.1` が必要です**（以下いずれの方法も `npx` 経由でサーバーを起動するため。Claude Code本体はNode不要のnativeインストールもありますが、その場合でもNodeは別途必要です）。
+**Node.js `>=24` が必要です**（以下いずれの方法も `npx` 経由でサーバーを起動するため。Claude Code本体はNode不要のnativeインストールもありますが、その場合でもNodeは別途必要です）。
 
 #### 1. npm（Claude Code CLI）
 
@@ -242,4 +242,4 @@ npm test        # ユニットテスト（lib.mjs / webp.mjs / marp.mjs）。詳
 node e2e.mjs     # stdio smokeテスト: server.mjsを子プロセス起動しツール一覧取得・実行を検証
 ```
 
-CIはNode 18.14.1 / 20 / 22 の3系統に加え、vendorチェックサム検証・公開tarball内容検査を実行します（[`.github/workflows/ci.yml`](./.github/workflows/ci.yml) 参照）。
+CIはNode 24 でのテストに加え、vendorチェックサム検証・公開tarball内容検査を実行します（[`.github/workflows/ci.yml`](./.github/workflows/ci.yml) 参照）。
