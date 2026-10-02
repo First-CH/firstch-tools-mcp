@@ -257,14 +257,18 @@ jobs:
           PACKAGE_VERSION: ${{ steps.release.outputs.version }}
         run: |
           set -eu
-          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+          # npm の latest 反映は実測で約1分かかる。15秒×20回＝最大約5分待つ。
+          attempts=20
+          for attempt in $(seq 1 "$attempts"); do
             published="$(npm view "$PACKAGE_NAME" version 2>/dev/null || true)"
             if [ "$published" = "$PACKAGE_VERSION" ]; then
               echo "Verified npm latest: $PACKAGE_NAME@$PACKAGE_VERSION"
               exit 0
             fi
-            echo "Waiting for npm propagation ($attempt/10): latest=${published:-unavailable}"
-            sleep 3
+            echo "Waiting for npm propagation ($attempt/$attempts): latest=${published:-unavailable}"
+            if [ "$attempt" -lt "$attempts" ]; then
+              sleep 15
+            fi
           done
           echo "npm latest did not become $PACKAGE_VERSION" >&2
           exit 1

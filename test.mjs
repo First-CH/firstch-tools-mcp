@@ -4218,7 +4218,7 @@ assert.equal(over.x_postable, false);
     'しんじゅく': 'shinjuku', 'ちば': 'chiba', 'つくば': 'tsukuba', 'ふじ': 'fuji', 'ぢ': 'ji', 'づ': 'zu',
     'しゃしん': 'shashin', 'ちゃわん': 'chawan', 'じゃま': 'jama', 'りょかん': 'ryokan', 'ぎゅうにゅう': 'gyunyu',
     'きって': 'kitte', 'まっちゃ': 'matcha', 'ざっし': 'zasshi', 'あっ': 'a', 'しんぶん': 'shinbun', 'きんえん': 'kinen',
-    'ファイル': 'fairu', 'ティー': 'ti', 'ディズニー': 'dizuni', 'ヴァイオリン': 'vaiorin', 'ウェブ': 'webu', 'シェア': 'shea',
+    'ファイル': 'fairu', 'ティー': 'ti', 'ディナー': 'dina', 'ヴァイオリン': 'vaiorin', 'ウェブ': 'webu', 'シェア': 'shea',
     'チェック': 'chekku', 'ジェット': 'jetto', 'ツァー': 'tsa', 'ヷ': 'va', 'を': 'o', 'ゐ': 'i', 'ゑ': 'e',
   };
   for (const [k, v] of Object.entries(hep)) assert.equal(kanaToRomaji(k, 'omit'), v, k);
