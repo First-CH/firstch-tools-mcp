@@ -31,7 +31,7 @@ In Claude Code:
 
 ## Data handling
 
-- **All processing happens locally on your machine.** The tools do not send your input to any server; nothing leaves your machine during a tool call.
+- **All processing happens locally on your machine.** The tools do not send your input to any server. The one exception is `marp_render` PDF output: remote image URLs in your Markdown are fetched by Chrome/Chromium (see below), so those URLs — including any path or query string — reach the image hosts.
 - The server makes no network requests of its own. Network access happens only when `npx` downloads the `@first-ch/tools-mcp` package from the npm registry at startup, and in the `marp_render` PDF case noted below. The package is published from this repository through npm Trusted Publishing.
 - **No usage data is collected by default.** Only if you set the `FIRSTCH_TOOLS_USAGE_LOG` environment variable to a file path does each tool call append one line (`{ ts, tool, source }` — timestamp, tool name and the fixed value `mcp`) to that local file. Tool inputs are not recorded, and nothing is transmitted.
 - Some tools write their results to local files: `webp_convert` saves `.webp` files next to the inputs (or to `outputDir`), and several tools write to an `outputPath` when you pass one.
