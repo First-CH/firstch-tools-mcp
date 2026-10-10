@@ -101,8 +101,11 @@ jobs:
 
       # 利用者が npx で入れる依存を検査する。package.json の overrides は依存として
       # 入れる側には効かないため、リポジトリ直下の npm audit では見えない脆弱性が残りうる
-      # （0.34.1 で実際にあった）。marp-core を bundleDependencies で同梱しているので、
-      # 公開物を空のキャッシュで入れ直し、そこで moderate 以上が無いことを確かめる。
+      # （0.34.1 で実際にあった）。公開物を空のキャッシュで入れ直し、moderate 以上が無いことを確かめる。
+      # 既知の例外は @xmldom/xmldom だけ: marp-core → mathjax-full → speech-rule-engine が 0.9.10 を
+      # 版固定で要求し、overrides でしか直せない。同梱（bundleDependencies）で直そうとしたが、
+      # npm 11 は同梱した部品への overrides を公開時に拒否する（EBUNDLEOVERRIDE・2026-10-10）。
+      # 上流が直したらこの例外を消す。それ以外の moderate 以上はこれまでどおり止める。
       - name: Audit the dependency tree that npx users actually install
         run: |
           set -eu
@@ -113,7 +116,18 @@ jobs:
           cd "$work/app"
           npm init -y >/dev/null
           npm install --cache "$work/cache" --no-audit --no-fund "$tgz"
-          npm audit --cache "$work/cache" --omit=dev --audit-level=moderate
+          npm audit --cache "$work/cache" --omit=dev --json > "$work/audit.json" || true
+          node - "$work/audit.json" <<'EOF'
+          const fs = require('fs');
+          const r = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          const allowed = new Set(['@xmldom/xmldom', 'speech-rule-engine', 'mathjax-full', '@marp-team/marp-core']);
+          const bad = Object.entries(r.vulnerabilities || {})
+            .filter(([, v]) => ['moderate', 'high', 'critical'].includes(v.severity))
+            .filter(([name]) => !allowed.has(name));
+          for (const [name, v] of Object.entries(r.vulnerabilities || {})) console.log(`${v.severity}\t${name}`);
+          if (bad.length) { console.error('moderate 以上の脆弱性（既知の例外以外）: ' + bad.map(([n]) => n).join(', ')); process.exit(1); }
+          console.log('既知の例外（@xmldom/xmldom 経由）以外に moderate 以上はありません');
+          EOF
 
       - name: Verify version & mcpName consistency across metadata files
         run: |
