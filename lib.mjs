@@ -155,7 +155,9 @@ export function buildJsonLd(type, fields = {}) {
   const builder = jsonLdBuilders[type];
   if (!builder) throw new Error(`未対応タイプ: ${type}（organization / faqpage / service / breadcrumb のいずれか）`);
   const json = builder(fields);
-  const snippet = `<script type="application/ld+json">\n${JSON.stringify(json, null, 2)}\n</script>`;
+  // 値に </script> や <!-- があってもスクリプト要素から抜けないよう、< を \u003c にする（JSONとしては同じ値）
+  const body = JSON.stringify(json, null, 2).replace(/</g, '\\u003c');
+  const snippet = `<script type="application/ld+json">\n${body}\n</script>`;
   return { json, snippet };
 }
 

@@ -6,8 +6,8 @@
 // そのまま持ってこられる（PNGの書き出しだけは Node に Canvas が無いため pngjs を使う）。
 // 実装は JIS X 0510 / ISO 18004 に沿っており、型番1〜40・誤り訂正レベル L/M/Q/H・
 // 数字/英数字/バイト(UTF-8)モードに対応する。
-import { writeFile } from 'node:fs/promises';
 import { PNG } from 'pngjs';
+import { writeOutput } from './fs-safe.mjs';
 
 export class QrError extends Error {}
 
@@ -719,7 +719,7 @@ export async function qrGenerateTool(opts = {}) {
   if (format === 'png') {
     const buf = qrMatrixToPng(qr, { size, margin });
     if (opts.outputPath) {
-      await writeFile(opts.outputPath, buf);
+      await writeOutput(opts.outputPath, buf, { overwrite: opts.overwrite });
       result.output = opts.outputPath;
       result.bytes = buf.length;
     } else {
@@ -732,7 +732,7 @@ export async function qrGenerateTool(opts = {}) {
 
   const body = format === 'text' ? qrMatrixToText(qr, { margin }) : qrMatrixToSvg(qr, { size, margin });
   if (opts.outputPath) {
-    await writeFile(opts.outputPath, body, 'utf8');
+    await writeOutput(opts.outputPath, body, { overwrite: opts.overwrite });
     result.output = opts.outputPath;
     result.bytes = Buffer.byteLength(body);
   } else if (format === 'text') {

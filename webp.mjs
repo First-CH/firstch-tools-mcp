@@ -4,7 +4,8 @@
 // ＝ブラウザ版と同一品質・同一アルゴリズム。
 // PNG/JPEG のデコードのみ Node に Canvas がないため pure-JS の pngjs / jpeg-js で行う。
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { writeOutput } from './fs-safe.mjs';
 import path from 'node:path';
 import { PNG } from 'pngjs';
 import jpeg from 'jpeg-js';
@@ -42,7 +43,7 @@ function decodeImage(buf, file) {
 /**
  * 1ファイルをWebPへ変換する。
  * @param {string} input  入力ファイルの絶対パス（PNG/JPEG）
- * @param {object} opts   { output?: 出力パス（既定=入力の拡張子を.webpに）, quality?: 1-100（既定80・サイト版と同じ） }
+ * @param {object} opts   { output?: 出力パス（既定=入力の拡張子を.webpに）, quality?: 1-100（既定80・サイト版と同じ）, overwrite?: 既存ファイルを上書きするか（既定 false） }
  * @returns {Promise<object>} { input, output, width, height, bytesIn, bytesOut, saving }
  */
 export async function convertToWebp(input, opts = {}) {
@@ -54,7 +55,7 @@ export async function convertToWebp(input, opts = {}) {
   const result = encoder.encode(image.data, image.width, image.height, { ...defaultOptions, quality });
   if (!result) throw new Error(`${path.basename(input)}: エンコードに失敗しました`);
   const webp = result.buffer;
-  await writeFile(output, Buffer.from(webp));
+  await writeOutput(output, Buffer.from(webp), { overwrite: opts.overwrite === true });
   const bytesOut = webp.byteLength;
   return {
     input,

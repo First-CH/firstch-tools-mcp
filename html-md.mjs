@@ -6,7 +6,8 @@
 // 挟んだ範囲を sed で切り出して diff すれば同期漏れを機械確認できる（csv-json.mjs と同じ手順。
 // 手順そのものは FirstCHTools の CLAUDE.md を参照）。追記は必ずコアの終わりより下へ。
 // DOM（DOMParser / innerHTML）に依存しないので、Node でもブラウザでも同じ結果になる。
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { writeOutput } from './fs-safe.mjs';
 import { basename } from 'node:path';
 
 /* ==================== ここから変換コア（site / MCP で同一） ==================== */
@@ -1217,7 +1218,7 @@ export async function htmlToMarkdownTool(opts = {}) {
     result.references = r.refs.map((ref) => ({ id: ref.id, url: ref.url, title: ref.title || null }));
   }
   if (o.outputPath) {
-    await writeFile(o.outputPath, r.markdown, 'utf8');
+    await writeOutput(o.outputPath, r.markdown, { overwrite: o.overwrite });
     result.output = o.outputPath;
     // ファイルに書けたなら本文は重複した重い情報でしかない
     delete result.markdown;

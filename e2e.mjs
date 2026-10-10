@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 34 registered tools, and `tools/call` actually executes handlers
+// returns all 35 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
 // color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert / slug_generate) and returns the expected values — this catches
@@ -96,6 +96,33 @@ try {
   ];
   assert.deepEqual(names, expected, `unexpected tool list: ${JSON.stringify(names)}`);
 
+  // annotations: 全ツールに readOnlyHint・destructiveHint・openWorldHint・title がある（Software Directory Policy 5E）。
+  // ファイルを書くツールは readOnlyHint:false・destructiveHint:true で、上書きは overwrite で明示させる。
+  const WRITERS = new Set([
+    'webp_convert', 'marp_render', 'testdata_generate', 'base64_encode', 'html_escape', 'json_to_yaml', 'yaml_to_json',
+    'px_rem_convert', 'markdown_table', 'sql_format', 'qr_generate', 'robotstxt_generate', 'case_convert', 'csv_convert',
+    'zenkaku_convert', 'html_to_markdown',
+  ]);
+  for (const t of listRes.result.tools) {
+    const a = t.annotations || {};
+    for (const k of ['readOnlyHint', 'destructiveHint', 'openWorldHint']) {
+      assert.equal(typeof a[k], 'boolean', `${t.name}: annotations.${k} が無い: ${JSON.stringify(a)}`);
+    }
+    assert.ok(a.title, `${t.name}: annotations.title が無い`);
+    const props = t.inputSchema?.properties || {};
+    const writes = 'outputPath' in props || 'outputDir' in props || WRITERS.has(t.name);
+    assert.equal(WRITERS.has(t.name), writes, `${t.name}: 書き込みツールの一覧と inputSchema が食い違う`);
+    if (writes) {
+      assert.equal(a.readOnlyHint, false, `${t.name}: ファイルを書くのに readOnlyHint が true`);
+      assert.equal(a.destructiveHint, true, `${t.name}: 上書きしうるのに destructiveHint が false`);
+      assert.ok('overwrite' in props, `${t.name}: overwrite 引数が無い`);
+    } else {
+      assert.equal(a.readOnlyHint, true, `${t.name}: 読むだけなのに readOnlyHint が false`);
+      assert.equal(a.destructiveHint, false, `${t.name}: destructiveHint が true`);
+    }
+    assert.equal(a.openWorldHint, t.name === 'marp_render', `${t.name}: openWorldHint が想定と違う`);
+  }
+
   // tools/call: actually invoke a couple of handlers so a change that makes every
   // handler throw (while leaving tools/list untouched) fails this smoke test too.
   const callTool = async (name, args, id) => {
@@ -105,6 +132,10 @@ try {
     assert.ok(text, `${name} returned no text content: ${JSON.stringify(res)}`);
     return JSON.parse(text);
   };
+
+  // encoding_convert: text だけでも呼べる（base64 は任意）
+  const encText = await callTool('encoding_convert', { text: 'abc\r\n' }, 990);
+  assert.equal(encText.newline?.dominant, 'CRLF', `encoding_convert text-only: ${JSON.stringify(encText)}`);
 
   const contrast = await callTool('contrast_check', { fg: '#333333', bg: '#ffffff' }, 3);
   assert.equal(contrast.ratio, 12.63, `contrast_check ratio mismatch: ${JSON.stringify(contrast)}`);

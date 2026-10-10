@@ -4,7 +4,8 @@
 // 2箇所ルール: 片方を直したらもう片方も同じ内容で直す（site側が正本）。
 // btoa / atob / TextEncoder / TextDecoder は Node 18+ にグローバルで存在するため、
 // ブラウザ版のコードをそのまま持ってこられる（環境差で結果がずれない）。
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { writeOutput } from './fs-safe.mjs';
 import { basename } from 'node:path';
 
 /* ==================== ここから変換コア（site/base64/app.js と同一） ==================== */
@@ -285,7 +286,7 @@ export async function base64Convert(opts = {}) {
       suggested_extension: extForMime(mimeType),
     };
     if (opts.outputPath) {
-      await writeFile(opts.outputPath, bytes);
+      await writeOutput(opts.outputPath, bytes, { overwrite: opts.overwrite });
       result.output = opts.outputPath;
       // ファイルに書けたなら base64 は重複した重い情報でしかない
       delete result.base64;

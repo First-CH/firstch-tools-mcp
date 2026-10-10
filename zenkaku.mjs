@@ -3,7 +3,8 @@
 // 「変換コア」ブロックは site 側の site/zenkaku/app.js と同一の実装。
 // 2箇所ルール: 片方を直したらもう片方も同じ内容で直す（site側が正本）。
 // 使っているのは String/RegExp/Map だけなので、ブラウザ版のコードをそのまま持ってこられる。
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { writeOutput } from './fs-safe.mjs';
 import { basename } from 'node:path';
 
 /* ==================== ここから変換コア（site / MCP で同一） ==================== */
@@ -445,7 +446,7 @@ export async function zenkakuConvertTool(opts = {}) {
     const i = notes.findIndex((n) => n.code === 'UNCHANGED');
     if (i !== -1) notes.splice(i, 1);
   } else if (opts.outputPath) {
-    await writeFile(opts.outputPath, r.text, 'utf8');
+    await writeOutput(opts.outputPath, r.text, { overwrite: opts.overwrite });
     result.output = opts.outputPath;
   } else if ([...r.text].length > MAX_TEXT) {
     result.text = [...r.text].slice(0, MAX_TEXT).join('');

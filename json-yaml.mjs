@@ -4,7 +4,8 @@
 // 2箇所ルール: 片方を直したらもう片方も同じ内容で直す（site側が正本）。
 // 使っているのは String / RegExp / Object だけなので、ブラウザ版のコードをそのまま持ってこられる
 // （YAMLの解析・生成も自前実装で、js-yaml 等の外部ライブラリには依存しない）。
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { writeOutput } from './fs-safe.mjs';
 import { basename } from 'node:path';
 
 /* ==================== ここから変換コア（site / MCP で同一） ==================== */
@@ -1630,7 +1631,7 @@ async function convert(direction, opts) {
   };
 
   if (o.outputPath) {
-    await writeFile(o.outputPath, r.output, 'utf8');
+    await writeOutput(o.outputPath, r.output, { overwrite: o.overwrite });
     result.output = o.outputPath;
     // ファイルに書けたなら本文は重複した重い情報でしかない
     delete result.text;

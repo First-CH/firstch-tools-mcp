@@ -8,7 +8,8 @@
  *
  * 使っているのは String/RegExp/JSON だけなので、ブラウザ版のコードをそのまま持ってこられる。
  * 完全ローカル処理・ネットワーク送信なし。 */
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
+import { writeOutput } from './fs-safe.mjs';
 import { basename } from 'node:path';
 
 /* ==================== ここから変換コア（site / MCP で同一） ==================== */
@@ -846,7 +847,7 @@ export async function csvConvertTool(opts = {}) {
   result.output_bytes = r.output_bytes;
 
   if (o.outputPath) {
-    await writeFile(o.outputPath, r.output, 'utf8');
+    await writeOutput(o.outputPath, r.output, { overwrite: o.overwrite });
     result.output_path = o.outputPath;
     // ファイルへ書けたなら本文は重複した重い情報でしかない
   } else {

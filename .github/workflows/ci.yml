@@ -22,6 +22,12 @@ jobs:
 
       - run: npm ci
 
+      # marp_render は Chrome をサンドボックス有効のまま起動する（--no-sandbox を既定で付けない）。
+      # ubuntu-24.04 のランナーは非特権ユーザー名前空間を AppArmor で制限しており、
+      # Chrome のサンドボックスが起動できないことがあるため、テスト環境だけ制限を外す。
+      - name: Allow Chrome's sandbox on the runner
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+
       - run: npm test
 
       - run: node e2e.mjs
@@ -68,6 +74,7 @@ jobs:
           const required = [
             'server.mjs',
             'lib.mjs',
+            'fs-safe.mjs',
             'webp.mjs',
             'package.json',
             'vendor/jsquash-webp/codec/enc/webp_enc_simd.wasm',
@@ -91,6 +98,22 @@ jobs:
           console.log('Tarball content check passed. Files:');
           console.log(files.join('\n'));
           EOF
+
+      # 利用者が npx で入れる依存を検査する。package.json の overrides は依存として
+      # 入れる側には効かないため、リポジトリ直下の npm audit では見えない脆弱性が残りうる
+      # （0.34.1 で実際にあった）。marp-core を bundleDependencies で同梱しているので、
+      # 公開物を空のキャッシュで入れ直し、そこで moderate 以上が無いことを確かめる。
+      - name: Audit the dependency tree that npx users actually install
+        run: |
+          set -eu
+          work="$RUNNER_TEMP/consumer"
+          mkdir -p "$work/pack" "$work/app"
+          npm pack --pack-destination "$work/pack" >/dev/null
+          tgz="$(find "$work/pack" -maxdepth 1 -name '*.tgz' -print -quit)"
+          cd "$work/app"
+          npm init -y >/dev/null
+          npm install --cache "$work/cache" --no-audit --no-fund "$tgz"
+          npm audit --cache "$work/cache" --omit=dev --audit-level=moderate
 
       - name: Verify version & mcpName consistency across metadata files
         run: |

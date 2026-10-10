@@ -8,7 +8,7 @@
     {
       "name": "firstch-tools",
       "source": "./plugins/firstch-tools",
-      "description": "First CH Tools MCP server: WCAG contrast, JP char count, WebP convert, JSON-LD, llms.txt, encoding convert, Marp slides render"
+      "description": "First CH Tools MCP server: 35 local tools for web production (WCAG contrast, JP char count, WebP, JSON-LD, llms.txt, Marp slides, format conversion and developer utilities)"
     }
   ]
 }

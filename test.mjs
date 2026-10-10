@@ -272,6 +272,120 @@ assert.equal(over.x_postable, false);
   await rm(p.outputs.html, { force: true });
 }
 
+// ---- ディレクトリ申請に向けた安全面（2026-10-10）: 上書き防止・外部通信なし・注入対策 ----
+{
+  const { writeOutput, defaultOutputDir } = await import('./fs-safe.mjs');
+  const { renderMarp, findChrome, chromeArgs, escapeHtml, stripRemoteImports } = await import('./marp.mjs');
+  const { convertToWebp } = await import('./webp.mjs');
+  const { buildJsonLd } = await import('./lib.mjs');
+  const { PNG } = await import('pngjs');
+  const { mkdtemp, readFile, writeFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const http = await import('node:http');
+
+  const dir = await mkdtemp(join(tmpdir(), 'firstch-safety-'));
+
+  // writeOutput: 既存ファイルは既定で上書きしない・overwrite:true なら上書きする
+  const f = join(dir, 'a.txt');
+  await writeOutput(f, 'one');
+  await assert.rejects(() => writeOutput(f, 'two'), /overwrite: true/);
+  assert.equal(await readFile(f, 'utf8'), 'one', '拒否したときは元の内容が残る');
+  await writeOutput(f, 'three', { overwrite: true });
+  assert.equal(await readFile(f, 'utf8'), 'three');
+
+  // outputPath を持つツール（代表: case_convert）も既定で上書きしない
+  const cc = join(dir, 'case.txt');
+  await writeFile(cc, 'keep');
+  await assert.rejects(() => caseConvertTool({ text: 'user_name', format: 'camel', outputPath: cc }), /overwrite/);
+  assert.equal(await readFile(cc, 'utf8'), 'keep');
+  await caseConvertTool({ text: 'user_name', format: 'camel', outputPath: cc, overwrite: true });
+  assert.equal((await readFile(cc, 'utf8')).trim(), 'userName');
+
+  // webp_convert: 隣に同名の .webp があれば上書きしない
+  const png = new PNG({ width: 8, height: 8 });
+  png.data.fill(120);
+  const src = join(dir, 'img.png');
+  await writeFile(src, PNG.sync.write(png));
+  const w1 = await convertToWebp(src);
+  await assert.rejects(() => convertToWebp(src), /overwrite/);
+  const w2 = await convertToWebp(src, { overwrite: true });
+  assert.equal(w1.output, w2.output);
+
+  // JSON-LD: 値に </script> があってもスクリプト要素から抜けない
+  const jl = buildJsonLd('organization', { name: 'x</script><script>alert(1)</script>' });
+  assert.ok(!jl.snippet.slice(0, -'</script>'.length).includes('</script>'), 'snippet 内に </script> が残らない');
+  assert.equal(jl.json.name, 'x</script><script>alert(1)</script>', 'json の値はそのまま');
+  assert.equal(JSON.parse(jl.snippet.split('\n').slice(1, -1).join('\n')).name, jl.json.name, 'エスケープ後もJSONとして同じ値');
+
+  // marp: title はエスケープして入れる
+  assert.equal(escapeHtml('</title><script>"\'&'), '&lt;/title&gt;&lt;script&gt;&quot;&#39;&amp;');
+  const base = join(dir, 'deck');
+  const evil = await renderMarp('# a\n\n:smile: 😀', { outputPath: base, title: '</title><script>alert(1)</script>' });
+  const evilHtml = await readFile(evil.outputs.html, 'utf8');
+  assert.ok(!evilHtml.includes('<script>alert(1)'), 'title から script が入らない');
+  assert.ok(evilHtml.includes('&lt;/title&gt;&lt;script&gt;'), 'title はエスケープ済み');
+
+  // marp: 既定で外部の URL を出力に含めない（Webフォント・twemoji の CDN）
+  for (const host of ['fonts.googleapis.com', 'fonts.gstatic.com', 'cdn.jsdelivr.net', 'twemoji']) {
+    assert.ok(!evilHtml.includes(host), `既定の出力に ${host} が無い`);
+  }
+  assert.ok(evilHtml.includes('😀'), '絵文字は文字のまま');
+
+  // marp: 同名ファイルがあれば上書きしない・overwrite:true で上書きする
+  await assert.rejects(() => renderMarp('# b', { outputPath: base }), /overwrite/);
+  await renderMarp('# b', { outputPath: base, overwrite: true });
+
+  // marp: gaia テーマの外部フォント @import を取り除き、取り除いたことを返す
+  const gaia = await renderMarp('<!-- theme: gaia -->\n# G', { outputPath: join(dir, 'gaia') });
+  const gaiaHtml = await readFile(gaia.outputs.html, 'utf8');
+  assert.ok(!/@import[^;]*https?:/.test(gaiaHtml), '外部 @import が残らない');
+  assert.ok(gaia.removed_remote_imports?.length >= 1, '取り除いた @import を返す');
+  const kept = await renderMarp('<!-- theme: gaia -->\n# G', { outputPath: join(dir, 'gaia2'), allowRemote: true });
+  assert.ok(!kept.removed_remote_imports, 'allowRemote:true なら取り除かない');
+  assert.deepEqual(stripRemoteImports("@import 'default';\na{}").removed, [], 'ローカルの @import は残す');
+
+  // marp: outputPath も inputPath も無ければ一時ディレクトリ下の専用フォルダへ書く
+  const tmpOut = await renderMarp('# t');
+  assert.ok(tmpOut.outputs.html.startsWith(await defaultOutputDir()), `既定の出力先: ${tmpOut.outputs.html}`);
+  await rm(tmpOut.outputs.html, { force: true });
+
+  // Chrome の起動引数: 既定でサンドボックスを外さない・外部通信を止める
+  const a0 = chromeArgs({ htmlFile: '/x.html', pdfPath: '/x.pdf', userDataDir: '/u', env: {} });
+  assert.ok(!a0.includes('--no-sandbox'), '既定で --no-sandbox を付けない');
+  assert.ok(a0.some((x) => x.startsWith('--host-resolver-rules=')), '既定で名前解決を止める');
+  assert.ok(a0.some((x) => x.startsWith('--proxy-server=')), '既定でIP直書きも止める');
+  const a1 = chromeArgs({ htmlFile: '/x.html', pdfPath: '/x.pdf', userDataDir: '/u', env: { MARP_CHROME_NO_SANDBOX: '1' } });
+  assert.ok(a1.includes('--no-sandbox'), 'MARP_CHROME_NO_SANDBOX=1 のときだけ外す');
+  const a2 = chromeArgs({ htmlFile: '/x.html', pdfPath: '/x.pdf', userDataDir: '/u', allowRemote: true, env: {} });
+  assert.ok(!a2.some((x) => x.startsWith('--host-resolver-rules=') || x.startsWith('--proxy-server=')), 'allowRemote なら止めない');
+
+  // 実際の Chrome で、既定では外部の画像を取りに行かないこと（ローカルのHTTPサーバーで受けて数える）
+  if (findChrome()) {
+    let hits = 0;
+    const srv = http.createServer((req, res) => {
+      hits++;
+      res.writeHead(200, { 'content-type': 'image/png' });
+      res.end(PNG.sync.write(png));
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+    const md = `# img\n\n![](http://127.0.0.1:${port}/a.png)\n`;
+    const off = await renderMarp(md, { outputPath: join(dir, 'off'), formats: ['pdf'] });
+    assert.ok(off.outputs.pdf, `PDF を作れる（サンドボックス有効のまま）: ${off.pdf_skipped || ''}`);
+    assert.equal(hits, 0, '既定では外部の画像を取りに行かない');
+    const on = await renderMarp(md, { outputPath: join(dir, 'on'), formats: ['pdf'], allowRemote: true });
+    assert.ok(on.outputs.pdf, `allowRemote でも PDF を作れる: ${on.pdf_skipped || ''}`);
+    assert.ok(hits >= 1, 'allowRemote:true なら外部の画像を読み込む');
+    // PDF も同名があれば上書きしない
+    await assert.rejects(() => renderMarp(md, { outputPath: join(dir, 'off'), formats: ['pdf'] }), /overwrite/);
+    await new Promise((r) => srv.close(r));
+  }
+
+  await rm(dir, { recursive: true, force: true });
+  console.log('safety ok');
+}
+
 // ---- テストデータ生成（testdata_generate） ----
 {
   const { generateTestData, generateRecords, serialize, encodeText, sjisEncode, FIELDS } = await import('./testdata.mjs');

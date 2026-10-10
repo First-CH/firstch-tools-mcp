@@ -4,7 +4,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { appendFile, writeFile } from 'node:fs/promises';
+import { appendFile } from 'node:fs/promises';
+import { writeOutput } from './fs-safe.mjs';
 import { createRequire } from 'node:module';
 import { contrastCheck, countChars, buildLlmsTxt, buildJsonLd, analyzeEncoding, convertEncoding } from './lib.mjs';
 import { generateTestData, FIELDS, DEFAULT_FIELDS, PRESETS } from './testdata.mjs';
@@ -40,6 +41,39 @@ import { slugGenerateTool } from './slug.mjs';
 const { version } = createRequire(import.meta.url)('./package.json');
 const server = new McpServer({ name: 'firstch-tools', version });
 
+// ---------------------------------------------------------------------------
+// ツールの注釈（MCP の annotations）
+// クライアントが「読むだけか・ファイルを書き換えうるか・外部と通信するか」を判断できるよう、
+// 全ツールに付ける。ファイルを書き出す引数（outputPath / outputDir）を持つツールと、
+// 常にファイルを書くツール（webp_convert・marp_render）は readOnlyHint: false・destructiveHint: true
+// （overwrite: true を渡すと既存ファイルを上書きしうるため）。既定では上書きしない。
+// それ以外は手元で計算する（または利用者が指定したファイルを読む）だけなので readOnlyHint: true。
+// 外部と通信しうるのは marp_render の allowRemote: true のときだけ。
+// ---------------------------------------------------------------------------
+const ALWAYS_WRITES = new Set(['webp_convert', 'marp_render']);
+const OPEN_WORLD = new Set(['marp_render']);
+
+function toolAnnotations(name, inputSchema = {}) {
+  const writes = ALWAYS_WRITES.has(name) || 'outputPath' in inputSchema || 'outputDir' in inputSchema;
+  const openWorldHint = OPEN_WORLD.has(name);
+  if (!writes) return { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint };
+  return { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint };
+}
+
+const OVERWRITE_PARAM = z
+  .boolean()
+  .optional()
+  .describe('出力先に同名のファイルがあるとき上書きするか（既定 false＝上書きせずエラーにする）');
+
+function registerTool(name, config, handler) {
+  let inputSchema = config.inputSchema || {};
+  const annotations = { title: config.title, ...toolAnnotations(name, inputSchema) };
+  if (!annotations.readOnlyHint && !('overwrite' in inputSchema)) {
+    inputSchema = { ...inputSchema, overwrite: OVERWRITE_PARAM };
+  }
+  return server.registerTool(name, { ...config, inputSchema, annotations }, handler);
+}
+
 const asText = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] });
 
 // 社内利用の計測（tools-strategy.md KPI 5）。環境変数を設定したときだけローカルJSONLに追記する
@@ -51,7 +85,7 @@ const logUsage = (tool) =>
     ? appendFile(USAGE_LOG, JSON.stringify({ ts: new Date().toISOString(), tool, source: 'mcp' }) + '\n').catch(() => {})
     : Promise.resolve();
 
-server.registerTool(
+registerTool(
   'contrast_check',
   {
     title: 'WCAGコントラスト比チェック',
@@ -69,7 +103,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'count_chars',
   {
     title: '文字数カウント（Xウェイト対応）',
@@ -86,7 +120,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'webp_convert',
   {
     title: '画像→WebP変換',
@@ -100,14 +134,14 @@ server.registerTool(
       outputDir: z.string().optional().describe('出力先ディレクトリ（省略時は各入力と同じ場所）'),
     },
   },
-  async ({ paths, quality, outputDir }) => {
+  async ({ paths, quality, outputDir, overwrite }) => {
     await logUsage('webp_convert');
     const { join, basename } = await import('node:path');
     const results = [];
     for (const p of paths) {
       try {
         const output = outputDir ? join(outputDir, basename(p).replace(/\.[^.]+$/, '') + '.webp') : undefined;
-        results.push(await convertToWebp(p, { quality, output }));
+        results.push(await convertToWebp(p, { quality, output, overwrite }));
       } catch (e) {
         results.push({ input: p, error: String(e.message || e) });
       }
@@ -116,7 +150,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'jsonld_generate',
   {
     title: 'JSON-LD構造化データ生成',
@@ -166,7 +200,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'llmstxt_generate',
   {
     title: 'llms.txt 生成',
@@ -200,7 +234,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'encoding_convert',
   {
     title: '文字コード・改行コード変換',
@@ -210,7 +244,7 @@ server.registerTool(
       'リポジトリ内ファイルの改行コード事故（CRLFがLFに書き換わる等）の確認に使う。' +
       'mode=analyze なら判定のみ、mode=convert なら変換後のテキストとbase64を返す。',
     inputSchema: {
-      base64: z.string().describe('対象ファイルの内容（base64）。テキストを直接渡す場合は text を使う'),
+      base64: z.string().optional().describe('対象ファイルの内容（base64）。テキストを直接渡す場合は text を使う（どちらか必須）'),
       text: z.string().optional().describe('base64の代わりにテキストを直接渡す場合（UTF-8として扱う）'),
       mode: z.enum(['analyze', 'convert']).optional().describe('既定 analyze。convert で変換結果を返す'),
       encoding: z.enum(['utf-8', 'shift_jis']).optional().describe('入力の文字コード。省略時は自動判定'),
@@ -230,17 +264,22 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'marp_render',
   {
     title: 'Marp Markdown→スライド レンダリング',
     description:
       'Marp Markdown をスライドへレンダリングし、HTML（テーマCSSをインラインした自己完結ファイル）や PDF を書き出す。' +
       'AIが生成したスライド用Markdownをそのまま渡せば描画まで完結する（社内の marp ビルドの定型化・顧客配布資料の生成に使う）。' +
-      '和文テーマ firstch（firstch-design 準拠・紙/墨/朱・IBM Plex Sans JP）を同梱し、既定テーマにする。' +
+      '和文テーマ firstch（紙/墨/朱・IBM Plex Sans JP が入っていれば使う）を同梱し、既定テーマにする。' +
       'Markdown 側の Marp フロントマター（例: theme:/paginate:/size:/`<!-- _class: lead -->`）はそのまま効く。' +
       'PDF はローカルの Chrome/Chromium を headless で呼び出して生成する（未検出なら HTML のみ返し理由を添える。' +
-      '環境変数 MARP_CHROME_PATH で実行ファイルを明示可）。完全ローカル処理・ネットワーク送信なし。',
+      '環境変数 MARP_CHROME_PATH で実行ファイルを明示可）。' +
+      '既定では外部へ通信しない（Webフォントを読まず、絵文字は文字のまま、組み込みテーマの外部フォント @import は取り除き、' +
+      'PDF を作る Chrome も外部への通信を止めて起動する）。Markdown が参照する外部の画像・CSS を PDF に入れたいときだけ allowRemote: true を渡す。' +
+      '出力した HTML を利用者がブラウザで開いたときは、Markdown に書いた外部画像をそのブラウザが読み込む。' +
+      'ファイルを書き出す（outputPath・inputPath と同じ場所、どちらも無ければ OS の一時ディレクトリ下の firstch-tools-mcp/）。' +
+      '同名のファイルがあれば上書きせずエラーにする（上書きは overwrite: true）。書き出したファイルは消さない。',
     inputSchema: {
       markdown: z.string().optional().describe('Marp Markdown 本文（inputPath と排他・どちらか必須）'),
       inputPath: z.string().optional().describe('Markdownファイルの絶対パス（markdown 未指定時に読み込む）'),
@@ -257,9 +296,13 @@ server.registerTool(
         .optional()
         .describe('出力ファイルのベースパス（拡張子は自動。省略時は inputPath 準拠、無ければ一時ディレクトリ）'),
       title: z.string().optional().describe('HTML の <title>（既定 "Marp slides"）'),
+      allowRemote: z
+        .boolean()
+        .optional()
+        .describe('Markdown が参照する外部の画像・CSS を読み込むか（既定 false＝外部へ通信しない）'),
     },
   },
-  async ({ markdown, inputPath, theme, formats, outputPath, title }) => {
+  async ({ markdown, inputPath, theme, formats, outputPath, title, overwrite, allowRemote }) => {
     await logUsage('marp_render');
     let md = markdown;
     let outBase = outputPath;
@@ -272,11 +315,11 @@ server.registerTool(
       if (!docTitle) docTitle = basename(inputPath, extname(inputPath));
     }
     if (md === undefined || md === '') throw new Error('markdown か inputPath のどちらかが必要です');
-    return asText(await renderMarp(md, { theme, formats, outputPath: outBase, title: docTitle }));
+    return asText(await renderMarp(md, { theme, formats, outputPath: outBase, title: docTitle, overwrite, allowRemote }));
   },
 );
 
-server.registerTool(
+registerTool(
   'testdata_generate',
   {
     title: 'テストデータ生成（ダミーCSV/JSON/Excel・境界値テキスト）',
@@ -310,7 +353,7 @@ server.registerTool(
     await logUsage('testdata_generate');
     const { _bytes, ...result } = generateTestData(opts);
     if (opts.outputPath && result.mode === 'records') {
-      await writeFile(opts.outputPath, _bytes);
+      await writeOutput(opts.outputPath, _bytes, { overwrite: opts.overwrite });
       result.output = opts.outputPath;
       // ファイルに書けたなら base64 は重複した重い情報でしかない
       delete result.base64;
@@ -319,7 +362,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'diff_check',
   {
     title: 'テキスト・コード差分チェック',
@@ -374,7 +417,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'cron_explain',
   {
     title: 'Cron式の解説＋次回発火日時',
@@ -401,7 +444,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'base64_encode',
   {
     title: 'Base64 / Data URI エンコード・デコード',
@@ -435,7 +478,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'url_params',
   {
     title: 'URLパラメータの分解・編集・再構築',
@@ -480,7 +523,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'html_escape',
   {
     title: 'HTML特殊文字のエスケープ・エンティティのデコード',
@@ -525,7 +568,7 @@ const JSON_YAML_SHARED =
   '設定ファイルの構文チェックにも使える。' +
   '読み替えで意味が変わる箇所は notes で知らせる（キーの重複＝後が勝つ・2の53乗を超える整数の桁落ちなど）。';
 
-server.registerTool(
+registerTool(
   'json_to_yaml',
   {
     title: 'JSON → YAML 変換・整形',
@@ -563,7 +606,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'yaml_to_json',
   {
     title: 'YAML → JSON 変換・構文チェック',
@@ -599,7 +642,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'px_rem_convert',
   {
     title: 'px ⇄ rem / em 単位換算・CSSの一括変換',
@@ -662,7 +705,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'color_convert',
   {
     title: 'カラーコード変換・アルファ透過計算',
@@ -706,7 +749,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'hash_generate',
   {
     title: 'MD5 / SHA-1 / SHA-256 / SHA-384 / SHA-512 ハッシュ生成・照合',
@@ -749,7 +792,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'jwt_decode',
   {
     title: 'JWTのデコード・有効期限チェック・署名の検証',
@@ -786,7 +829,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'user_agent_parse',
   {
     title: 'User-Agent文字列の解析とデバイス判定',
@@ -824,7 +867,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'uuid_generate',
   {
     title: 'UUID v4 / ULID の一括生成',
@@ -863,7 +906,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'aspect_ratio_calc',
   {
     title: 'アスペクト比の計算・レスポンシブサイズ算出',
@@ -924,7 +967,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'markdown_table',
   {
     title: 'TSV/CSV → Markdownテーブル整形・相互変換',
@@ -982,7 +1025,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'sql_format',
   {
     title: 'SQLクエリの整形（予約語の大文字化・句ごとの改行・字下げ）',
@@ -1034,7 +1077,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'qr_generate',
   {
     title: 'QRコードの生成（SVG / PNG / 文字の図）',
@@ -1076,7 +1119,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'unixtime_convert',
   {
     title: 'UNIXタイムスタンプ⇄日時の相互変換',
@@ -1121,7 +1164,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'robotstxt_generate',
   {
     title: 'robots.txt の生成（AIクローラー対応）',
@@ -1203,7 +1246,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'case_convert',
   {
     title: '文字列のケース変換（camelCase / snake_case / kebab-case）',
@@ -1248,7 +1291,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'csv_convert',
   {
     title: 'CSV/TSV ⇄ JSON の相互変換',
@@ -1297,7 +1340,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'zenkaku_convert',
   {
     title: '全角⇄半角の変換とテキストの掃除',
@@ -1349,7 +1392,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'cidr_calc',
   {
     title: 'IPアドレス・CIDRの計算',
@@ -1386,7 +1429,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'date_calc',
   {
     title: '日数・営業日の計算',
@@ -1432,7 +1475,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'html_to_markdown',
   {
     title: 'HTML → Markdown 変換',
@@ -1481,7 +1524,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'wareki_convert',
   {
     title: '和暦 ⇄ 西暦変換・満年齢',
@@ -1517,7 +1560,7 @@ server.registerTool(
   },
 );
 
-server.registerTool(
+registerTool(
   'slug_generate',
   {
     title: 'URLスラッグ生成（日本語タイトル→ローマ字）',

@@ -8,10 +8,18 @@
 // HTMLから印刷する（puppeteer/Chromium を同梱しない＝`npx -y` 導入を軽く保つ）。
 // Chrome が見つからない場合は HTML のみ返し、PDFは skip して理由を添える。
 //
-// 和文テーマ firstch（firstch-design 準拠）を marp-theme.css として同梱し、
+// 和文テーマ firstch を marp-theme.css として同梱し、
 // Markdown が theme 指示を持たないときの既定テーマにする。
+//
+// 通信について（既定＝外へ取りに行かない）:
+// - Webフォントは読み込まない（OSにあるフォントで描く。IBM Plex Sans JP が入っていれば使う）
+// - 絵文字は画像（CDNの twemoji）に置き換えず、文字のまま出す
+// - 組み込みテーマ（gaia/uncover）の CSS にある外部フォントの @import は取り除く
+// - PDF を作る Chrome は外部への通信を止めて起動する
+// allowRemote: true を渡したときだけ、Markdown が参照する外部の画像・CSS を読み込む。
 
 import { readFile, writeFile, rm } from 'node:fs/promises';
+import { writeOutput, defaultOutputDir, OutputExistsError } from './fs-safe.mjs';
 import { existsSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -71,16 +79,28 @@ function slideSize(html, css) {
   return { w: 1280, h: 720 };
 }
 
+// <title> へ入れる文字列のエスケープ（</title><script> の注入を防ぐ）
+export function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+// CSS の外部 @import（例: gaia テーマの fonts.bunny.net）を取り除く。取り除いた URL を返す。
+export function stripRemoteImports(css) {
+  const removed = [];
+  const out = css.replace(/@import\s+(?:url\(\s*)?(["']?)((?:https?:)?\/\/[^"')\s;]+)\1\s*\)?[^;]*;/gi, (_m, _q, url) => {
+    removed.push(url);
+    return '';
+  });
+  return { css: out, removed };
+}
+
 function buildHtmlDoc({ html, css, size, title }) {
   return `<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${title}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<title>${escapeHtml(title)}</title>
 <style>
 ${css}
 </style>
@@ -117,20 +137,40 @@ ${html}
 </html>`;
 }
 
-async function htmlToPdf(chrome, htmlFile, pdfPath) {
-  const userDataDir = path.join(os.tmpdir(), `marp-chrome-${process.pid}-${Date.now()}`);
-  const args = [
-    '--headless',
-    '--disable-gpu',
-    '--no-sandbox',
-    '--no-pdf-header-footer',
-    '--virtual-time-budget=8000', // Webフォント読み込みを待つ
+// Chrome の起動引数。サンドボックスは既定で有効のまま。
+// root で動かすコンテナなどサンドボックスが使えない環境だけ、利用者が
+// MARP_CHROME_NO_SANDBOX=1 を設定して外す（サーバーが勝手に外さない）。
+export function chromeArgs({ htmlFile, pdfPath, userDataDir, allowRemote = false, env = process.env }) {
+  const args = ['--headless', '--disable-gpu', '--no-pdf-header-footer'];
+  if (env.MARP_CHROME_NO_SANDBOX === '1') args.push('--no-sandbox');
+  if (!allowRemote) {
+    // 外部への通信を止める（名前解決を全部失敗させ、IP直書きも届かないプロキシへ向ける）。
+    // file:// で開くローカルの HTML と、その中に埋め込んだデータは影響を受けない。
+    args.push('--host-resolver-rules=MAP * ~NOTFOUND', '--proxy-server=127.0.0.1:9', '--proxy-bypass-list=<-loopback>');
+  }
+  args.push(
+    '--virtual-time-budget=8000', // 画像の読み込みを待つ
     `--user-data-dir=${userDataDir}`,
     `--print-to-pdf=${pdfPath}`,
     pathToFileURL(htmlFile).href,
-  ];
+  );
+  return args;
+}
+
+async function htmlToPdf(chrome, htmlFile, pdfPath, { allowRemote } = {}) {
+  const userDataDir = path.join(os.tmpdir(), `marp-chrome-${process.pid}-${Date.now()}`);
+  const args = chromeArgs({ htmlFile, pdfPath, userDataDir, allowRemote });
   try {
     await execFileP(chrome, args, { timeout: 60000, maxBuffer: 16 * 1024 * 1024 });
+  } catch (e) {
+    const msg = String((e && (e.stderr || e.message)) || e);
+    if (/sandbox/i.test(msg)) {
+      throw new Error(
+        'Chrome をサンドボックス付きで起動できませんでした（root で動かすコンテナ等）。' +
+          'この環境で使う場合は、利用者の判断で環境変数 MARP_CHROME_NO_SANDBOX=1 を設定してください。',
+      );
+    }
+    throw e;
   } finally {
     await rm(userDataDir, { recursive: true, force: true }).catch(() => {});
   }
@@ -143,8 +183,10 @@ async function htmlToPdf(chrome, htmlFile, pdfPath) {
  * @param {object} opts
  *   - theme    {string}   'firstch'（既定）/ 'default' / 'gaia' / 'uncover'。md内 theme 指示が優先される
  *   - formats  {string[]} ['html'] 既定。'html' / 'pdf' を指定
- *   - outputPath {string} 出力ファイルのベースパス（拡張子は format 側で決まる）。省略時は tmp
- *   - title    {string}   HTML の <title>（既定 'Marp slides'）
+ *   - outputPath {string} 出力ファイルのベースパス（拡張子は format 側で決まる）。省略時は OS の一時ディレクトリ下の firstch-tools-mcp/
+ *   - title    {string}   HTML の <title>（既定 'Marp slides'・エスケープして入れる）
+ *   - overwrite {boolean} 既存ファイルを上書きするか（既定 false＝同名があればエラー）
+ *   - allowRemote {boolean} Markdown が参照する外部の画像・CSS を読むか（既定 false＝外へ通信しない）
  * @returns {Promise<object>} { theme, slides, size, outputs: {html?, pdf?}, pdf_skipped? }
  */
 export async function renderMarp(markdown, opts = {}) {
@@ -160,16 +202,23 @@ export async function renderMarp(markdown, opts = {}) {
     if (f !== 'html' && f !== 'pdf') throw new Error(`未対応の format: ${f}（html / pdf のみ）`);
   }
 
+  const overwrite = opts.overwrite === true;
+  const allowRemote = opts.allowRemote === true;
   const base = opts.outputPath
     ? opts.outputPath.replace(/\.(html?|pdf)$/i, '')
-    : path.join(os.tmpdir(), `marp-${process.pid}-${Date.now()}`);
+    : path.join(await defaultOutputDir(), `marp-${process.pid}-${Date.now()}`);
   const title = opts.title || 'Marp slides';
 
   // marp-core は html:false（marp-cli既定と同じ）で生HTML注入を無効化。ディレクティブ用コメントは有効。
-  const marp = new Marp({ html: false });
+  // 絵文字は CDN の画像へ置き換えない（文字のまま）。
+  const marp = new Marp({ html: false, emoji: { shortcode: true, unicode: false } });
   marp.themeSet.add(await firstchThemeCss());
   marp.themeSet.default = marp.themeSet.get(theme);
-  const { html, css } = marp.render(markdown);
+  const rendered = marp.render(markdown);
+  const html = rendered.html;
+  let css = rendered.css;
+  let removedImports = [];
+  if (!allowRemote) ({ css, removed: removedImports } = stripRemoteImports(css));
 
   const slides = (html.match(/<section id=/g) || []).length;
   const size = slideSize(html, css);
@@ -180,13 +229,16 @@ export async function renderMarp(markdown, opts = {}) {
   const wantPdf = formats.includes('pdf');
 
   let htmlForPrint;
+  // PDF は Chrome が書くので、上書きの確認を先に済ませる
+  if (wantPdf && !overwrite && existsSync(`${base}.pdf`)) throw new OutputExistsError(`${base}.pdf`);
   if (wantHtml) {
     outputs.html = `${base}.html`;
-    await writeFile(outputs.html, doc);
+    await writeOutput(outputs.html, doc, { overwrite });
     htmlForPrint = outputs.html;
   }
 
   const result = { theme, slides, size, outputs };
+  if (removedImports.length) result.removed_remote_imports = removedImports;
 
   if (wantPdf) {
     const chrome = findChrome();
@@ -205,7 +257,7 @@ export async function renderMarp(markdown, opts = {}) {
       }
       try {
         outputs.pdf = `${base}.pdf`;
-        await htmlToPdf(chrome, htmlForPrint, outputs.pdf);
+        await htmlToPdf(chrome, htmlForPrint, outputs.pdf, { allowRemote });
       } catch (e) {
         delete outputs.pdf;
         result.pdf_skipped = `PDF生成に失敗しました: ${String(e.message || e)}`;

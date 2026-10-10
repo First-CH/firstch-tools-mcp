@@ -417,8 +417,8 @@ export function buildRobotsTxt(config) {
 
 /* ==================== MCPツールの入口（site側には無い） ==================== */
 
-import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { writeOutput } from './fs-safe.mjs';
 
 const AI_PURPOSES = ['training', 'search', 'user'];
 
@@ -496,7 +496,7 @@ export async function robotsTxtGenerate(opts = {}) {
 
   if (opts.outputPath) {
     if (!path.isAbsolute(opts.outputPath)) throw new Error('outputPath は絶対パスで指定してください');
-    await writeFile(opts.outputPath, result.text, 'utf8');
+    await writeOutput(opts.outputPath, result.text, { overwrite: opts.overwrite });
     return { written: opts.outputPath, warnings: result.warnings, stats: result.stats, ai: result.ai };
   }
   return result;

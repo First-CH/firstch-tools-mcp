@@ -23,19 +23,38 @@ In Claude Code:
 /plugin install firstch-tools@first-ch
 ```
 
+## Where it works
+
+**Claude Code** (and Cowork on the desktop) only. The server is a local stdio process started with `npx`, and the Claude chat apps (claude.ai web, desktop chat and mobile) ignore local MCP servers, so installing the plugin there provides nothing.
+
 ## Requirements
 
-- **Node.js 24 or later.** The plugin starts the server with `npx -y @first-ch/tools-mcp@<version>` (the version is pinned in this plugin's `.mcp.json`), so Node.js must be installed even if your Claude client itself does not need it.
-- The server runs as a **local stdio process** on your machine, so it needs a Claude environment that can launch local MCP servers, such as Claude Code.
+- **Node.js 24 or later.** The plugin starts the server with `npx -y @first-ch/tools-mcp@<version>` (the version is pinned in this plugin's `.mcp.json`), so Node.js must be installed even if your Claude client itself does not need it. Older Node versions print an `EBADENGINE` warning, and refuse to start if npm's `engine-strict` is enabled.
 - PDF output from `marp_render` additionally needs a locally installed Chrome/Chromium; without one, it returns HTML only.
+
+## Example prompts
+
+1. **Contrast check** — "Check whether #767676 text on a #ffffff background passes WCAG AA and AAA."
+   Claude calls `contrast_check` and reports the ratio (4.54:1): AA passes for normal text, AAA fails for normal text (passes for large text).
+2. **Structured data** — "Create FAQPage JSON-LD for these two questions: 'Do you build WordPress sites?' — 'Yes.' and 'How long does a site take?' — 'About a month.'"
+   Claude calls `jsonld_generate` and returns the JSON-LD object plus a ready-to-paste `<script type="application/ld+json">` snippet.
+3. **Image optimisation** — "Convert /Users/me/site/images/hero.png to WebP at quality 75."
+   Claude calls `webp_convert`, writes `/Users/me/site/images/hero.webp` next to the original and reports the size saving. If `hero.webp` already exists it stops with an error instead of overwriting it, unless you ask it to overwrite.
 
 ## Data handling
 
-- **All processing happens locally on your machine.** The tools do not send your input to any server. The one exception is `marp_render` PDF output: remote image URLs in your Markdown are fetched by Chrome/Chromium (see below), so those URLs — including any path or query string — reach the image hosts.
-- The server makes no network requests of its own. Network access happens only when `npx` downloads the `@first-ch/tools-mcp` package from the npm registry at startup, and in the `marp_render` PDF case noted below. The package is published from this repository through npm Trusted Publishing.
+- **The plugin collects nothing and sends nothing to First CH or anyone else.** The tools process the input you give them on your machine and return the result to Claude.
+- **Network access** happens only (1) when `npx` downloads `@first-ch/tools-mcp` and its dependencies from the npm registry at startup, and (2) when you call `marp_render` with `allowRemote: true`, in which case your local Chrome/Chromium fetches the remote images and stylesheets that your own Markdown references (those URLs reach their hosts). By default `marp_render` loads no web fonts, keeps emoji as text, strips remote `@import`s from the built-in themes and starts Chrome with network access blocked. If you later open an HTML file it produced in a browser, that browser loads any remote images your Markdown links to.
+- **Files**: tools read only the paths you pass (`path`, `inputPath`, `paths`, …). Tools with `outputPath`/`outputDir`, plus `webp_convert` (next to the input by default) and `marp_render` (next to `inputPath`, or in `<OS temp dir>/firstch-tools-mcp/` when no path is given), write result files. **Existing files are never overwritten unless you pass `overwrite: true`.** Written files are yours; the server does not delete them. These tools are annotated `readOnlyHint: false`, `destructiveHint: true`; all others are `readOnlyHint: true`.
 - **No usage data is collected by default.** Only if you set the `FIRSTCH_TOOLS_USAGE_LOG` environment variable to a file path does each tool call append one line (`{ ts, tool, source }` — timestamp, tool name and the fixed value `mcp`) to that local file. Tool inputs are not recorded, and nothing is transmitted.
-- Some tools write their results to local files: `webp_convert` saves `.webp` files next to the inputs (or to `outputDir`), and several tools write to an `outputPath` when you pass one.
-- `marp_render` PDF output is rendered by your local Chrome/Chromium, which loads any remote images referenced in your Markdown, as a browser would.
+- Chrome/Chromium for PDFs runs with its sandbox enabled. Only in environments where the sandbox cannot start (for example as root in a container) can you opt out with `MARP_CHROME_NO_SANDBOX=1`.
+
+Details: [PRIVACY.md](./PRIVACY.md).
+
+## Support
+
+- Bugs and questions: [GitHub Issues](https://github.com/First-CH/firstch-tools-mcp/issues)
+- Security concerns or anything you'd rather not post publicly: the contact form at [first-ch.com](https://first-ch.com/#contact)
 
 ## License
 
