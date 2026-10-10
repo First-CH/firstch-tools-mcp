@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // First CH Tools MCP サーバー（stdio）
 // 導入例: npx -y @first-ch/tools-mcp
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { McpServer } from '@modelcontextprotocol/server';
+import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
 import { appendFile } from 'node:fs/promises';
 import { writeOutput } from './fs-safe.mjs';
@@ -39,7 +39,15 @@ import { warekiConvertTool } from './wareki.mjs';
 import { slugGenerateTool } from './slug.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
-const server = new McpServer({ name: 'firstch-tools', version });
+// SDK v2 の serveStdio は接続ごとに factory から McpServer を1つ作る（旧仕様の initialize と
+// 2026-07-28 仕様の server/discover の両方を、同じ登録内容で受ける）。ツールは下の registerTool で
+// 一覧に積み、buildServer() が接続のたびに登録する。
+const TOOLS = [];
+function buildServer() {
+  const server = new McpServer({ name: 'firstch-tools', version }, { capabilities: { tools: {} } });
+  for (const { name, config, handler } of TOOLS) server.registerTool(name, config, handler);
+  return server;
+}
 
 // ---------------------------------------------------------------------------
 // ツールの注釈（MCP の annotations）
@@ -71,7 +79,8 @@ function registerTool(name, config, handler) {
   if (!annotations.readOnlyHint && !('overwrite' in inputSchema)) {
     inputSchema = { ...inputSchema, overwrite: OVERWRITE_PARAM };
   }
-  return server.registerTool(name, { ...config, inputSchema, annotations }, handler);
+  // v2 は Standard Schema を求めるため、引数の形（shape）を z.object で包んで渡す
+  TOOLS.push({ name, config: { ...config, inputSchema: z.object(inputSchema), annotations }, handler });
 }
 
 const asText = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] });
@@ -505,7 +514,7 @@ registerTool(
         .enum(['component', 'uri', 'form'])
         .optional()
         .describe('encode/decode の方式（既定 component=encodeURIComponent / uri=encodeURI / form=スペースを +）'),
-      set: z.record(z.string()).optional().describe('parse: 追加・上書きするパラメータ（値が空文字なら削除）'),
+      set: z.record(z.string(), z.string()).optional().describe('parse: 追加・上書きするパラメータ（値が空文字なら削除）'),
       remove: z.array(z.string()).optional().describe('parse: 削除するパラメータ名（大文字小文字を無視）'),
       utm: z
         .record(z.string())
@@ -1211,7 +1220,7 @@ registerTool(
         .object({
           preset: z.enum(['allow', 'block', 'training', 'none', 'custom']).optional()
             .describe("AIクローラーのプリセット（既定 'training'＝学習目的だけ拒否）"),
-          overrides: z.record(z.enum(['allow', 'block', 'omit'])).optional()
+          overrides: z.record(z.string(), z.enum(['allow', 'block', 'omit'])).optional()
             .describe("1件ずつの指定（例: {\"GPTBot\": \"block\", \"PerplexityBot\": \"allow\"}）"),
           inherit: z.boolean().optional()
             .describe('共通の禁止パスを許可したAIクローラーのグループへ書き写すか（既定 true）'),
@@ -1596,4 +1605,4 @@ registerTool(
   },
 );
 
-await server.connect(new StdioServerTransport());
+serveStdio(buildServer);
