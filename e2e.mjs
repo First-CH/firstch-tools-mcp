@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 42 registered tools, and `tools/call` actually executes handlers
+// returns all 42 local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
+// API via FIRSTCH_APPS_BASE_URL, never to the network), and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
 // color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert / slug_generate / htpasswd_generate / openapi_doc_generate /
@@ -12,9 +13,35 @@ import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { createServer } from 'node:http';
+import { APP_TOOLS } from './apps.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const child = spawn(process.execPath, [join(here, 'server.mjs')], { stdio: ['pipe', 'pipe', 'inherit'] });
+
+// app_* ツールは apps.first-ch.com を呼ぶ。E2E では実ネットワークを使わず、手元に立てた偽の API へ向ける
+// （FIRSTCH_APPS_BASE_URL）。受けたリクエストを記録し、パスごとに決めた応答を返す。
+const appsRequests = [];
+const fakeApps = createServer((req, res) => {
+  let raw = '';
+  req.on('data', (c) => (raw += c));
+  req.on('end', () => {
+    appsRequests.push({ method: req.method, url: req.url, headers: req.headers, body: raw });
+    if (req.url === '/meta-check/api/inspect') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ url: JSON.parse(raw).url, title: { value: 'Example', ok: true }, stored: false }));
+    } else {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'invalid_url', message: 'URLの形式が正しくありません。' }));
+    }
+  });
+});
+await new Promise((resolve) => fakeApps.listen(0, '127.0.0.1', resolve));
+const fakeAppsUrl = `http://127.0.0.1:${fakeApps.address().port}`;
+
+const child = spawn(process.execPath, [join(here, 'server.mjs')], {
+  stdio: ['pipe', 'pipe', 'inherit'],
+  env: { ...process.env, FIRSTCH_APPS_BASE_URL: fakeAppsUrl, FIRSTCH_ENABLE_APPS: '1' },
+});
 
 const pending = new Map();
 let buf = '';
@@ -102,6 +129,9 @@ try {
     'yaml_to_json',
     'zenkaku_convert',
   ];
+  // apps.first-ch.com を呼ぶ app_* ツールは apps.mjs の定義表から足す
+  expected.push(...APP_TOOLS.map((d) => d.name));
+  expected.sort();
   assert.deepEqual(names, expected, `unexpected tool list: ${JSON.stringify(names)}`);
 
   // annotations: 全ツールに readOnlyHint・destructiveHint・openWorldHint・title がある（Software Directory Policy 5E）。
@@ -128,7 +158,7 @@ try {
       assert.equal(a.readOnlyHint, true, `${t.name}: 読むだけなのに readOnlyHint が false`);
       assert.equal(a.destructiveHint, false, `${t.name}: destructiveHint が true`);
     }
-    assert.equal(a.openWorldHint, t.name === 'marp_render', `${t.name}: openWorldHint が想定と違う`);
+    assert.equal(a.openWorldHint, t.name === 'marp_render' || t.name.startsWith('app_'), `${t.name}: openWorldHint が想定と違う`);
   }
 
   // tools/call: actually invoke a couple of handlers so a change that makes every
@@ -846,7 +876,41 @@ try {
   const clErr = await request('tools/call', { name: 'css_layout_generate', arguments: { gap: 500 } }, 174);
   assert.ok(clErr.result?.isError, `css_layout_generate should reject gap 500: ${JSON.stringify(clErr)}`);
 
+  // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
+  const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);
+  assert.deepEqual(appMeta, { url: 'https://example.com/', title: { value: 'Example', ok: true }, stored: false });
+  const metaReq = appsRequests.find((r) => r.url === '/meta-check/api/inspect');
+  assert.equal(metaReq?.method, 'POST', `app_meta_check request: ${JSON.stringify(metaReq)}`);
+  assert.deepEqual(JSON.parse(metaReq.body), { url: 'https://example.com/' });
+  assert.match(metaReq.headers['user-agent'], /^first-ch-tools-mcp\/\d+\.\d+\.\d+/);
+  const appErr = await request('tools/call', { name: 'app_headers', arguments: { url: 'nope', lang: 'en' } }, 201);
+  assert.ok(appErr.result?.isError, `app_headers should surface the API error: ${JSON.stringify(appErr)}`);
+  assert.match(JSON.stringify(appErr.result), /invalid_url/);
+  assert.ok(appsRequests.some((r) => r.url === '/en/headers/api/inspect'), 'lang=en should call the /en/ API');
+
+  // 既定（FIRSTCH_ENABLE_APPS なし）では app_* を出さない＝入力を外へ送るツールは明示的に有効にしたときだけ
+  const plain = spawn(process.execPath, [join(here, 'server.mjs')], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, FIRSTCH_ENABLE_APPS: '' } });
+  const plainNames = await new Promise((resolve, reject) => {
+    let out = '';
+    const timer = setTimeout(() => reject(new Error('timeout waiting for default tools/list')), 15000);
+    plain.stdout.on('data', (chunk) => {
+      out += chunk.toString('utf8');
+      for (const line of out.split('\n')) {
+        if (!line.trim()) continue;
+        let msg; try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.id === 2) { clearTimeout(timer); resolve((msg.result?.tools || []).map((t) => t.name)); }
+      }
+    });
+    plain.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'e2e-default', version: '0.0.0' } } }) + '\n');
+    plain.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+    plain.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) + '\n');
+  });
+  plain.kill();
+  assert.ok(plainNames.length > 30, `default tools/list returned too few tools: ${plainNames.length}`);
+  assert.equal(plainNames.filter((n) => n.startsWith('app_')).length, 0, 'app_* tools must be opt-in (FIRSTCH_ENABLE_APPS=1)');
+
   console.log('e2e ok:', names.join(', '));
+  fakeApps.close();
   child.kill();
   process.exit(0);
 } catch (err) {

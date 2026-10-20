@@ -4,6 +4,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
+import { APP_TOOLS, callAppTool } from './apps.mjs';
 import { appendFile } from 'node:fs/promises';
 import { writeOutput } from './fs-safe.mjs';
 import { createRequire } from 'node:module';
@@ -63,7 +64,7 @@ function buildServer() {
 // 常にファイルを書くツール（webp_convert・marp_render）は readOnlyHint: false・destructiveHint: true
 // （overwrite: true を渡すと既存ファイルを上書きしうるため）。既定では上書きしない。
 // それ以外は手元で計算する（または利用者が指定したファイルを読む）だけなので readOnlyHint: true。
-// 外部と通信しうるのは marp_render の allowRemote: true のときだけ。
+// 外部と通信しうるのは marp_render の allowRemote: true のときと、apps.first-ch.com へ送る app_* ツール。
 // ---------------------------------------------------------------------------
 const ALWAYS_WRITES = new Set(['webp_convert', 'marp_render']);
 const OPEN_WORLD = new Set(['marp_render']);
@@ -100,6 +101,26 @@ const logUsage = (tool) =>
   USAGE_LOG
     ? appendFile(USAGE_LOG, JSON.stringify({ ts: new Date().toISOString(), tool, source: 'mcp' }) + '\n').catch(() => {})
     : Promise.resolve();
+
+// ---------------------------------------------------------------------------
+// apps.first-ch.com の API を呼ぶツール（app_*）。定義表と HTTP 呼び出しは apps.mjs に置き、
+// ここではまとめて登録するだけにする。他のツールと違い入力を apps.first-ch.com へ送るので、
+// openWorldHint: true を付ける（端末のファイルは書き換えないので readOnlyHint: true のまま）。
+// ---------------------------------------------------------------------------
+// 既定では登録しない（端末内で完結するツールだけを出す）。入力を外へ送るツールは、利用者が
+// FIRSTCH_ENABLE_APPS=1 で明示的に有効にしたときだけ出す（「既定では外部へ通信しない」を崩さないため・2026-10-21）
+const APPS_ENABLED = /^(1|true|yes|on)$/i.test(process.env.FIRSTCH_ENABLE_APPS ?? '');
+for (const def of APPS_ENABLED ? APP_TOOLS : []) {
+  OPEN_WORLD.add(def.name);
+  registerTool(
+    def.name,
+    { title: def.title, description: def.description, inputSchema: def.inputSchema },
+    async (args) => {
+      await logUsage(def.name);
+      return asText(await callAppTool(def, args, { version }));
+    },
+  );
+}
 
 registerTool(
   'contrast_check',

@@ -12,6 +12,10 @@ The server provides tools for, among others:
 - **Images and documents** — PNG/JPEG → WebP conversion, Marp Markdown → slides (HTML, optional PDF), QR codes, HTML → Markdown, print size ⇄ pixels / DPI, OpenAPI → Markdown reference and TypeScript types
 - **Developer utilities** — JSON ⇄ YAML, CSV/TSV ⇄ JSON, Markdown tables, SQL formatting, text/code diffing, cron explanation, Base64/data URIs, HTML escaping, hashing, JWT decoding, User-Agent parsing, UUID/ULID, Unix time, IP/CIDR calculation, business-day date calculation, case conversion, line operations (dedupe, sort, number), htpasswd generation for Basic auth, test data generation
 
+All of the above run on your machine. In addition:
+
+- **Site checks via apps.first-ch.com (`app_*` tools)** — one tool per web app at [apps.first-ch.com](https://apps.first-ch.com) (33 in all): GEO/AI-search readiness, meta tags, security headers, SSL certificates, DNS, DNS propagation, email DNS (SPF/DKIM/DMARC), domain expiry and availability, redirects, HTTP status, broken links, OGP, headings, structured data, AI-crawler access, robots.txt, sitemaps, hreflang, mixed content, images, tech stack, WordPress, feeds, favicons, brand assets, Japanese readability, FAQ-vs-site and NAP consistency, plus AI-assisted Japanese business-tone and LP-copy checks. **These tools send their input (a URL, domain name or text) to apps.first-ch.com** — see Data handling below.
+
 The full, current tool list with inputs is in the [repository README](https://github.com/First-CH/firstch-tools-mcp#tools).
 
 ## Installation
@@ -43,8 +47,9 @@ In Claude Code:
 
 ## Data handling
 
-- **The plugin collects nothing and sends nothing to First CH or anyone else.** The tools process the input you give them on your machine and return the result to Claude.
-- **Network access** happens only (1) when `npx` downloads `@first-ch/tools-mcp` and its dependencies from the npm registry at startup, and (2) when you call `marp_render` with `allowRemote: true`, in which case your local Chrome/Chromium fetches the remote images and stylesheets that your own Markdown references (those URLs reach their hosts). By default `marp_render` loads no web fonts, keeps emoji as text, strips remote `@import`s from the built-in themes and starts Chrome with network access blocked. If you later open an HTML file it produced in a browser, that browser loads any remote images your Markdown links to.
+- **Local tools (every tool without the `app_` prefix) send nothing to First CH or anyone else.** They process the input you give them on your machine and return the result to Claude.
+- **The `app_*` tools are different: each call sends its input (the URL, domain name, DKIM selector or text) to First CH's server at apps.first-ch.com**, which processes it and returns the result. The apps store neither the input nor the result. Apps that check a site fetch that site from First CH's server; the two AI apps (`app_tone_check`, `app_lp_persona_check`) pass the text to Cloudflare Workers AI and are rate-limited (5 calls per 10 minutes per IP, 50 calls per day across both). Your public IP reaches apps.first-ch.com as with any web request and is used only for in-memory rate limiting. Do not pass confidential text or URLs to `app_*` tools.
+- **Network access by the local tools** happens only (1) when `npx` downloads `@first-ch/tools-mcp` and its dependencies from the npm registry at startup, and (2) when you call `marp_render` with `allowRemote: true`, in which case your local Chrome/Chromium fetches the remote images and stylesheets that your own Markdown references (those URLs reach their hosts). By default `marp_render` loads no web fonts, keeps emoji as text, strips remote `@import`s from the built-in themes and starts Chrome with network access blocked. If you later open an HTML file it produced in a browser, that browser loads any remote images your Markdown links to.
 - **Files**: tools read only the paths you pass (`path`, `inputPath`, `paths`, …). Tools with `outputPath`/`outputDir`, plus `webp_convert` (next to the input by default) and `marp_render` (next to `inputPath`, or in `<OS temp dir>/firstch-tools-mcp/` when no path is given), write result files. **Existing files are never overwritten unless you pass `overwrite: true`.** Written files are yours; the server does not delete them. These tools are annotated `readOnlyHint: false`, `destructiveHint: true`; all others are `readOnlyHint: true`.
 - **No usage data is collected by default.** Only if you set the `FIRSTCH_TOOLS_USAGE_LOG` environment variable to a file path does each tool call append one line (`{ ts, tool, source }` — timestamp, tool name and the fixed value `mcp`) to that local file. Tool inputs are not recorded, and nothing is transmitted.
 - Chrome/Chromium for PDFs runs with its sandbox enabled. Only in environments where the sandbox cannot start (for example as root in a container) can you opt out with `MARP_CHROME_NO_SANDBOX=1`.
@@ -63,3 +68,5 @@ MIT. The bundled WebP codec carries its own licenses (Apache-2.0 and BSD-3-Claus
 ## Publisher
 
 First CH LLC — [first-ch.com](https://first-ch.com)
+
+> `app_*` tools are off by default and only appear when `FIRSTCH_ENABLE_APPS=1` is set; without it, nothing leaves your machine.
