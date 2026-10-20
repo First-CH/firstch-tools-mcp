@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 42 local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
+// returns all 43 local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
 // API via FIRSTCH_APPS_BASE_URL, never to the network), and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
 // color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert / slug_generate / htpasswd_generate / openapi_doc_generate /
-// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate) and returns the expected values — this catches
+// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate / wiki_doc_lint) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -126,6 +126,7 @@ try {
     'uuid_generate',
     'wareki_convert',
     'webp_convert',
+    'wiki_doc_lint',
     'yaml_to_json',
     'zenkaku_convert',
   ];
@@ -875,6 +876,23 @@ try {
 
   const clErr = await request('tools/call', { name: 'css_layout_generate', arguments: { gap: 500 } }, 174);
   assert.ok(clErr.result?.isError, `css_layout_generate should reject gap 500: ${JSON.stringify(clErr)}`);
+
+  // wiki_doc_lint: 重複・孤立・表記ゆれ・リンク切れと、壊れた引数（読むだけのツール）
+  const wikiBody = '経費精算は月末までに申請します。領収書の原本は翌月5日までに総務へ提出し、立替金は翌月25日に振り込みます。交通費は乗車日と区間を入力すれば領収書は要りません。';
+  const wl = await callTool('wiki_doc_lint', {
+    files: [
+      { path: 'README.md', text: '# 目次\n- [手順](new.md)\n- [[無いページ]]\n' },
+      { path: 'new.md', text: '# 手順\n' + wikiBody + '\nサーバの再起動は夜間。' },
+      { path: 'old.md', text: '# 手順\n' + wikiBody },
+    ],
+  }, 180);
+  assert.equal(wl.stats?.duplicatePairs, 1, `wiki_doc_lint duplicates mismatch: ${JSON.stringify(wl.stats)}`);
+  assert.deepEqual(wl.orphans?.map((o) => [o.path, o.addLine]), [['old.md', '- [手順](old.md)']], `wiki_doc_lint orphans mismatch: ${JSON.stringify(wl.orphans)}`);
+  assert.equal(wl.terms?.[0]?.hits?.[0]?.after, 'サーバーの再起動は夜間。', `wiki_doc_lint terms mismatch: ${JSON.stringify(wl.terms)}`);
+  assert.deepEqual(wl.broken?.map((b) => b.target), ['無いページ']);
+  assert.match(wl.report, /^# 社内文書チェックの結果/);
+  const wlErr = await request('tools/call', { name: 'wiki_doc_lint', arguments: { files: [{ path: 'a.md', text: 'x' }], threshold: 2 } }, 181);
+  assert.ok(wlErr.result?.isError, `wiki_doc_lint should reject threshold 2: ${JSON.stringify(wlErr)}`);
 
   // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
   const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);

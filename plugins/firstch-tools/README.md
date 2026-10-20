@@ -10,6 +10,7 @@ The server provides tools for, among others:
 - **SEO and AI-crawler files** — schema.org JSON-LD, `llms.txt`, `robots.txt` with AI-crawler presets, URL parameter editing, URL slugs from Japanese titles, FAQ structured data (FAQPage JSON-LD + Markdown), title/meta-description pixel-width checks for search results
 - **Japanese text** — character and X (Twitter) post-weight counting, full-width ⇄ half-width conversion, Japanese era ⇄ Western date conversion, encoding and line-ending detection/conversion (UTF-8 / Shift_JIS)
 - **Images and documents** — PNG/JPEG → WebP conversion, Marp Markdown → slides (HTML, optional PDF), QR codes, HTML → Markdown, print size ⇄ pixels / DPI, OpenAPI → Markdown reference and TypeScript types
+- **Internal docs** — near-duplicate pages, orphan pages, inconsistent or outdated terms and broken links in a wiki exported from Notion, Confluence and the like, with suggested fixes
 - **Developer utilities** — JSON ⇄ YAML, CSV/TSV ⇄ JSON, Markdown tables, SQL formatting, text/code diffing, cron explanation, Base64/data URIs, HTML escaping, hashing, JWT decoding, User-Agent parsing, UUID/ULID, Unix time, IP/CIDR calculation, business-day date calculation, case conversion, line operations (dedupe, sort, number), htpasswd generation for Basic auth, test data generation
 
 All of the above run on your machine. In addition:

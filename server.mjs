@@ -45,6 +45,7 @@ import { linesProcessTool } from './lines.mjs';
 import { dpiCalcTool } from './dpi.mjs';
 import { serpCheckTool } from './serp.mjs';
 import { cssLayoutGenerateTool } from './css-layout.mjs';
+import { wikiDocLintTool } from './wiki-doc-lint.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 // SDK v2 の serveStdio は接続ごとに factory から McpServer を1つ作る（旧仕様の initialize と
@@ -1923,6 +1924,42 @@ registerTool(
   async (opts) => {
     await logUsage('css_layout_generate');
     return asText(await cssLayoutGenerateTool(opts));
+  },
+);
+
+registerTool(
+  'wiki_doc_lint',
+  {
+    title: '社内文書の重複・孤立・表記ゆれチェック',
+    description:
+      'Notion・Backlog Wiki・Confluence などから書き出した社内文書（Markdown / HTML / テキスト）を点検する（tools.first-ch.com/wiki-doc-lint/ と同一ロジック）。' +
+      '社内資料の棚卸しや、AIに読ませる前の古い・重複した情報の洗い出しに使う。' +
+      '返すのは①内容がほぼ同じページの組（duplicates: 記号と空白を除いた本文の4文字単位の断片の Jaccard 係数・threshold 以上・それぞれにしかない行・被リンクの多い方〔同数なら本文が長い方〕を残す修正案）' +
+      '②ほかのどのページからもリンクされていない孤立ページ（orphans: Notion 型の親ページか目次ページに足すリンクの1行 addLine つき。index・README・home などの目次ページは entryPages=false にしない限り数えない）' +
+      '③表記ゆれ・旧称（terms: 「揃える表記 ← ゆれ」の辞書〔既定の辞書に dictionary を足す〕と、辞書に無いカタカナ語の語末の長音ゆれ〔多い方に揃える案〕。各箇所の行番号と修正前後の文）' +
+      '④リンク切れ（broken: 文書の拡張子を持つ相対リンクと [[ページ名]] のうち、読み込んだファイルに行き先が無いもの）と、修正案をまとめた Markdown の report。' +
+      'リンクは [文字](パス)・[[ページ名]]・a タグを読み、相対パス・ページ名・Notion のIDつきファイル名・Notion/Confluence のURL末尾のページ名で照合する。' +
+      'コードブロック・インラインコード・URL・HTMLタグは表記ゆれの対象外で、語の途中（ユーザビリティの中のユーザ）は拾わない。' +
+      'paths（ファイルかフォルダーの絶対パス。フォルダーはサブフォルダーまで読み、隠しフォルダーと node_modules は飛ばす）か files（{ path, text } の配列）のどちらか一方を渡す。' +
+      '文字コードは UTF-8 / Shift_JIS / UTF-16（BOM）を自動判別。3,000ファイル・合計60MBまで。ZIP は展開してから渡す。ファイルは読むだけで書き換えない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      paths: z.array(z.string()).optional().describe('点検するファイル・フォルダーの絶対パス（files と排他）'),
+      files: z
+        .array(z.object({ path: z.string().describe('ページのパス（リンクの照合に使う相対パス）'), text: z.string().describe('本文') }))
+        .optional()
+        .describe('本文を直接渡す（paths と排他）'),
+      threshold: z.number().optional().describe('重複とみなす類似度（0.5〜1・既定 0.8）'),
+      dictionary: z.string().optional().describe('表記ゆれ・旧称の辞書（1行に1つ「揃える表記 ← ゆれ1, ゆれ2」か「旧称 → 新しい名前」。# はコメント。既定の辞書に足す）'),
+      useDefaultDictionary: z.boolean().optional().describe('既定の辞書（サーバー←サーバ・ユーザー←ユーザ・問い合わせ←問合せ など）を使う（既定 true）'),
+      autoChoon: z.boolean().optional().describe('辞書に無いカタカナ語の語末の長音ゆれ（メモリ／メモリー）も探す（既定 true）'),
+      entryPages: z.boolean().optional().describe('index・README・home などの目次ページを孤立に数えない（既定 true）'),
+      format: z.enum(['both', 'json', 'markdown']).optional().describe("返す形（既定 'both'＝一覧と report / 'json'＝一覧だけ / 'markdown'＝report と件数だけ）"),
+      lang: z.enum(['ja', 'en']).optional().describe("修正案・レポートの言語と既定の辞書（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('wiki_doc_lint');
+    return asText(await wikiDocLintTool(opts));
   },
 );
 

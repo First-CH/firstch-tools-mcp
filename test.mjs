@@ -87,6 +87,7 @@ import { mkdtemp as oaMkdtemp, readFile as oaReadFile, rm as oaRm } from 'node:f
 import { tmpdir as oaTmpdir } from 'node:os';
 import { join as oaJoin } from 'node:path';
 import { faqJsonldTool, build as faqBuild, parseBulk as faqParseBulk, parseAnswer as faqParseAnswer, FaqJsonldToolError } from './faq-jsonld.mjs';
+import { wikiDocLintTool, lintDocs as wdlLint, WikiDocLintError } from './wiki-doc-lint.mjs';
 import { linesProcessTool, processLines, PRESETS as LINES_PRESETS, LinesToolError } from './lines.mjs';
 import {
   dpiCalcTool, dpiCalc, dpiReverse, dpiFor, dpiGrade, dpiTable, dpNum, fmt as dpFmt, bytes as dpBytes,
@@ -4994,6 +4995,54 @@ components:
   await assert.rejects(() => cssLayoutGenerateTool({ lang: 'fr' }), CssLayoutError);
 
   console.log('css_layout_generate ok');
+}
+
+// ==================== wiki_doc_lint ====================
+{
+  const { mkdtemp, mkdir, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const root = await mkdtemp(join(tmpdir(), 'wdl-'));
+  await mkdir(join(root, 'sub'));
+  await mkdir(join(root, '.git'));
+  await writeFile(join(root, 'README.md'), '# 目次\n- [a](sub/a.md)\n');
+  // 「サーバの設定。サーバー管理。」を Shift_JIS で
+  await writeFile(join(root, 'sub', 'a.md'), Buffer.from([0x83, 0x54, 0x81, 0x5b, 0x83, 0x6f, 0x82, 0xcc, 0x90, 0xdd, 0x92, 0xe8, 0x81, 0x42, 0x83, 0x54, 0x81, 0x5b, 0x83, 0x6f, 0x81, 0x5b, 0x8a, 0xc7, 0x97, 0x9d, 0x81, 0x42]));
+  await writeFile(join(root, 'sub', 'b.html'), '<h1>孤立</h1>');
+  await writeFile(join(root, 'sub', 'x.png'), 'PNG');
+  await writeFile(join(root, '.git', 'c.md'), '# 隠し');
+  const r = await wikiDocLintTool({ paths: [root] });
+  assert.equal(r.stats.docs, 3, '隠しフォルダーと画像は読まない');
+  assert.equal(r.stats.skipped, 1);
+  assert.deepEqual(r.encodings, { 'utf-8': 2, shift_jis: 1 });
+  assert.deepEqual(r.orphans.map((o) => [o.path, o.addLine]), [['sub/b.html', '- [孤立](sub/b.html)']]);
+  assert.deepEqual(r.terms.map((t) => [t.preferred, t.hits[0].line, t.hits[0].after]), [['サーバー', 1, 'サーバーの設定。サーバー管理。']]);
+  assert.match(r.report, /## 2\. 孤立ページ/);
+  // 辞書: 既定に足す / 既定を使わない / 英語
+  const files = [{ path: 'a.md', text: '# a\n精算くんで申請。サーバの設定。' }];
+  const add = await wikiDocLintTool({ files, dictionary: '経費ナビ ← 精算くん', format: 'json' });
+  assert.deepEqual(add.terms.map((t) => t.preferred).sort(), ['サーバー', '経費ナビ']);
+  assert.equal(add.report, undefined);
+  const only = await wikiDocLintTool({ files, dictionary: '経費ナビ ← 精算くん', useDefaultDictionary: false, format: 'markdown' });
+  assert.equal(only.terms, undefined);
+  assert.match(only.report, /精算くん → 経費ナビ/);
+  assert.match(only.report, /^(?![\s\S]*サーバ → サーバー)/);
+  const none = await wikiDocLintTool({ files, useDefaultDictionary: false, autoChoon: false });
+  assert.equal(none.stats.termKinds, 0);
+  const en = await wikiDocLintTool({ files: [{ path: 'a.md', text: 'Send an e-mail.' }], lang: 'en' });
+  assert.equal(en.terms[0].hits[0].after, 'Send an email.');
+  // サイト側と同じ判定（コアは site/wiki-doc-lint/app.js と同一）
+  assert.equal(wdlLint([{ path: 'a.md', text: 'ユーザビリティ' }]).stats.termHits, 0);
+  // 壊れた引数
+  await assert.rejects(() => wikiDocLintTool({}), WikiDocLintError);
+  await assert.rejects(() => wikiDocLintTool({ paths: [root], files }), WikiDocLintError);
+  await assert.rejects(() => wikiDocLintTool({ paths: ['relative/dir'] }), WikiDocLintError);
+  await assert.rejects(() => wikiDocLintTool({ files, threshold: 0.3 }), WikiDocLintError);
+  await assert.rejects(() => wikiDocLintTool({ files, format: 'html' }), WikiDocLintError);
+  await assert.rejects(() => wikiDocLintTool({ files, lang: 'fr' }), WikiDocLintError);
+  await assert.rejects(() => wikiDocLintTool({ files: [{ path: 'a.png', text: 'x' }] }), WikiDocLintError);
+  await assert.rejects(() => wikiDocLintTool({ files: [{ path: 1, text: 'x' }] }), WikiDocLintError);
+  console.log('wiki_doc_lint ok');
 }
 
 console.log('all tests passed');
