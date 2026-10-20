@@ -73,6 +73,7 @@ jobs:
           // redistribution).
           const required = [
             'server.mjs',
+            'apps.mjs',
             'lib.mjs',
             'fs-safe.mjs',
             'webp.mjs',
@@ -82,7 +83,7 @@ jobs:
             'vendor/jsquash-webp/codec/LICENSE.codec.md',
           ];
           // Dev-only files that must NOT leak into the published package.
-          const forbidden = ['test.mjs', 'e2e.mjs'];
+          const forbidden = ['test.mjs', 'test-apps.mjs', 'e2e.mjs'];
 
           const missing = required.filter((f) => !files.includes(f));
           const leaked = forbidden.filter((f) => files.includes(f));
