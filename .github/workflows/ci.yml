@@ -138,6 +138,9 @@ jobs:
           const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
           const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
           const server = JSON.parse(fs.readFileSync('server.json', 'utf8'));
+          if ((server.description || '').length > 100) {
+            throw new Error(`server.json#description is ${server.description.length} chars; the MCP Registry schema allows 100 (the registry stayed at 0.4.1 for months because of this)`);
+          }
           const plugin = JSON.parse(
             fs.readFileSync('plugins/firstch-tools/.claude-plugin/plugin.json', 'utf8'),
           );
@@ -332,3 +335,28 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$tag" -m "$tag"
           git push origin "$tag"
+
+      # MCP Registry（registry.modelcontextprotocol.io）は npm に自動では追従しない。npm の latest と
+      # Registry の版が違えば、GitHub Actions の OIDC で io.github.First-CH/* を公開する（人のログイン不要・2026-10-21）
+      - name: Sync the MCP Registry
+        if: github.ref == 'refs/heads/main'
+        env:
+          PUBLISHER_VERSION: v1.8.1
+        run: |
+          set -eu
+          name="$(node -p "require('./server.json').name")"
+          want="$(node -p "require('./server.json').version")"
+          npm_latest="$(npm view "$(node -p "require('./package.json').name")" version)"
+          if [ "$npm_latest" != "$want" ]; then
+            echo "npm latest ($npm_latest) is not $want yet; skip the registry."
+            exit 0
+          fi
+          have="$(curl -fsS "https://registry.modelcontextprotocol.io/v0/servers?search=$name&version=latest" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const r=JSON.parse(s).servers||[];const m=r.find(x=>(x.server||x).name===process.argv[1]);console.log(m?(m.server||m).version:'')})" "$name")"
+          if [ "$have" = "$want" ]; then
+            echo "MCP Registry already has $name $want."
+            exit 0
+          fi
+          echo "MCP Registry has ${have:-nothing}; publishing $want."
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
