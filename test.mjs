@@ -77,6 +77,26 @@ import {
   dateCalcTool, dcToDays, dcFromDays, dcWeekday, dcParseDate, dcRun,
   HOLIDAYS, DateCalcError, DateCalcToolError,
 } from './date-calc.mjs';
+import {
+  htpasswdGenerateTool, md5, md5crypt, bcrypt, verifyHash, htpasswdLine, parseBulk, parseIps, isIPv6,
+  snippet as htSnippetText, randomPassword, htCheckRows, HtpasswdToolError,
+} from './htpasswd.mjs';
+import { openApiDocGenerateTool, oaGenerate, oaFileBase, jyParseYaml as oaParseYaml, OpenApiDocToolError } from './openapi-doc.mjs';
+import { createHash as oaCreateHash } from 'node:crypto';
+import { mkdtemp as oaMkdtemp, readFile as oaReadFile, rm as oaRm } from 'node:fs/promises';
+import { tmpdir as oaTmpdir } from 'node:os';
+import { join as oaJoin } from 'node:path';
+import { faqJsonldTool, build as faqBuild, parseBulk as faqParseBulk, parseAnswer as faqParseAnswer, FaqJsonldToolError } from './faq-jsonld.mjs';
+import { linesProcessTool, processLines, PRESETS as LINES_PRESETS, LinesToolError } from './lines.mjs';
+import {
+  dpiCalcTool, dpiCalc, dpiReverse, dpiFor, dpiGrade, dpiTable, dpNum, fmt as dpFmt, bytes as dpBytes,
+  paperByKey, paperSize, PAPERS, TABLE_KEYS, DpiToolError,
+} from './dpi.mjs';
+import { serpCheckTool, serpJudge, measure as serpMeasure, layout as serpLayout, wrap as serpWrap, urlParts as serpUrlParts, SerpToolError } from './serp.mjs';
+import {
+  cssLayoutGenerateTool, parseAreas, tracksToCss, buildCss, buildHtml, diagnose, defaultState, applyPreset,
+  CL_TEXT, PRESETS, PRESET_IDS, CssLayoutError,
+} from './css-layout.mjs';
 
 // 黒×白 = 21:1（WCAG既知値）
 const bw = contrastCheck('#000000', '#ffffff');
@@ -4406,6 +4426,574 @@ assert.equal(over.x_postable, false);
   await assert.rejects(() => slugGenerateTool({ items: new Array(1001).fill('a') }), SlugToolError);
 
   console.log('slug_generate ok');
+}
+
+// ==================== htpasswd_generate ====================
+{
+  const enc = (s) => new TextEncoder().encode(s);
+  const hex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+  // MD5（RFC 1321 の試験値）
+  assert.equal(hex(md5(enc(''))), 'd41d8cd98f00b204e9800998ecf8427e');
+  assert.equal(hex(md5(enc('The quick brown fox jumps over the lazy dog'))), '9e107d9d372bb6826bd81d3542a419d6');
+  // apr1（Apache の文書の例）・bcrypt（OpenBSD の試験値）・{SHA}
+  assert.equal(md5crypt(enc('myPassword'), 'r31.....'), '$apr1$r31.....$HqJZimcKQFAMYayBlzkrA/');
+  assert.equal((await verifyHash('$2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW', 'U*U')).ok, true);
+  assert.deepEqual(await verifyHash('myName:$apr1$r31.....$HqJZimcKQFAMYayBlzkrA/', 'myPassword'), { user: 'myName', format: 'apr1', ok: true });
+  assert.equal((await verifyHash('{SHA}W6ph5Mm5Pz8GgiULbPgzG37mj9g=', 'password')).ok, true);
+  // site/htpasswd/app.js と同じ値（固定ソルトで計算した値）
+  assert.equal(bcrypt(enc('secret'), 5, new Uint8Array(16).fill(7)), '$2y$05$/uaF/uaF/uaF/uaF/uaF/uqOlJvf5V6mxHa8l/Vi42EntB04znnsa');
+  assert.equal(bcrypt(enc('パスワード'), 4, new Uint8Array(16).fill(1), '2b'), '$2b$04$.OC/.OC/.OC/.OC/.OC/.O3nW/daIHRUVuQ76rYGvlm6vIXxbRKkS');
+  assert.equal(md5crypt(enc('secret'), 'abcdefgh'), '$apr1$abcdefgh$h9FWgUz3n9YxylKLlR5SQ/');
+  // 72バイトを超えた分は bcrypt が使わない
+  const salt = new Uint8Array(16).fill(3);
+  assert.equal(bcrypt(enc('a'.repeat(72)), 4, salt), bcrypt(enc('a'.repeat(73)), 4, salt));
+  // 生成した行は照合できる・違うパスワードは一致しない・コスト15以上と $2x$ は照合しない
+  const line = htpasswdLine('u', 'secret', { algo: 'bcrypt', cost: 4 });
+  assert.match(line, /^u:\$2y\$04\$[./A-Za-z0-9]{53}$/);
+  assert.equal((await verifyHash(line, 'secret')).ok, true);
+  assert.equal((await verifyHash(line, 'wrong')).ok, false);
+  assert.match(htpasswdLine('u', 'secret', { algo: 'apr1' }), /^u:\$apr1\$[./0-9A-Za-z]{8}\$[./0-9A-Za-z]{22}$/);
+  assert.equal((await verifyHash('$2y$31$' + '.'.repeat(53), 'x')).reason, 'cost');
+  assert.equal((await verifyHash('$2x$05$' + '.'.repeat(53), 'x')).ok, null);
+  // 入力の読み取り・IP・スニペット（site と同じ）
+  assert.deepEqual(parseBulk('a:b\n#c\n\n d : e:f \r\nnoPw\n'), [
+    { line: 1, user: 'a', password: 'b' }, { line: 4, user: 'd', password: ' e:f ' }, { line: 5, user: 'noPw', password: '' },
+  ]);
+  assert.deepEqual(parseIps('192.0.2.1 : 12345::1 2001:db8::/32'), { ok: ['192.0.2.1', '2001:db8::/32'], bad: [':', '12345::1'] });
+  assert.ok(isIPv6('::ffff:192.0.2.1') && !isIPv6('1::2::3'));
+  assert.equal(htSnippetText('apache', '/home/x/.htpasswd', 'Staging', ['203.0.113.10', '2001:db8::/32']),
+    'AuthType Basic\nAuthName "Staging"\nAuthUserFile /home/x/.htpasswd\n<RequireAny>\n    Require ip 203.0.113.10\n    Require ip 2001:db8::/32\n    Require valid-user\n</RequireAny>');
+  assert.match(htSnippetText('nginx', '/a b/.htpasswd', '', []), /auth_basic "Restricted Area";\n {4}auth_basic_user_file "\/a b\/\.htpasswd";/);
+  assert.match(randomPassword(16), /^[A-HJ-NP-Za-km-z2-9\-_.!@%+=]{16}$/);
+  // 検査（site の generate() と同じ判定）
+  const chk = htCheckRows([{ line: 1, user: 'a:b', password: 'x' }, { line: 2, user: '', password: 'x' }, { line: 3, user: 'dup', password: 'dup' },
+    { line: 4, user: 'dup', password: '' }], { algo: 'bcrypt', cost: 12, lang: 'ja' }, () => 'GENERATED');
+  assert.deepEqual(chk.notes.map((n) => n.code), ['PW_AUTO', 'USER_COLON', 'USER_EMPTY', 'PW_SHORT', 'PW_SAME', 'DUP', 'COST_HIGH']);
+  assert.equal(chk.good[1].password, 'GENERATED');
+
+  // ツールのラッパー
+  const one = await htpasswdGenerateTool({ user: 'client', password: 'correct-horse-battery', cost: 4 });
+  assert.equal(one.count, 1);
+  assert.equal((await verifyHash(one.entries[0].line, 'correct-horse-battery')).ok, true);
+  assert.deepEqual(one.generated, []);
+  assert.ok(!JSON.stringify(one).includes('correct-horse-battery'), '渡されたパスワードを結果に繰り返さない');
+  const many = await htpasswdGenerateTool({ bulk: 'client:\ndirector:\n', algo: 'apr1', server: 'nginx', ips: ['1.2.3.4', 'bogus'], lang: 'en' });
+  assert.equal(many.count, 2);
+  assert.equal(many.generated.length, 2);
+  for (const g of many.generated) {
+    const e = many.entries.find((x) => x.user === g.user);
+    assert.equal((await verifyHash(e.line, g.password)).ok, true);
+  }
+  assert.equal(many.notes[0].code, 'PW_AUTO');
+  assert.ok(many.notes.some((n) => n.code === 'APR1'));
+  assert.match(many.snippet.text, /allow 1\.2\.3\.4;/);
+  assert.equal(many.snippet.notes[0].code, 'IP_BAD');
+  assert.match(many.snippet.notes[0].message, /Not an IP address/);
+  const snipOnly = await htpasswdGenerateTool({ server: 'apache', file: 'rel/.htpasswd', realm: '社内' });
+  assert.equal(snipOnly.count, undefined);
+  assert.deepEqual(snipOnly.snippet.notes.map((n) => n.code), ['FILE_REL', 'REALM_NONASCII']);
+  const v = await htpasswdGenerateTool({ hash: 'myName:$apr1$r31.....$HqJZimcKQFAMYayBlzkrA/', password: 'myPassword' });
+  assert.deepEqual([v.mode, v.match, v.format, v.user, v.notes[0].code], ['verify', true, 'apr1', 'myName', 'V_OK']);
+  assert.equal((await htpasswdGenerateTool({ mode: 'verify', hash: '$apr1$r31.....$HqJZimcKQFAMYayBlzkrA/', password: 'no' })).match, false);
+  await assert.rejects(() => htpasswdGenerateTool({}), HtpasswdToolError);
+  await assert.rejects(() => htpasswdGenerateTool({ user: 'a', cost: 15 }), HtpasswdToolError);
+  await assert.rejects(() => htpasswdGenerateTool({ user: 'a', algo: 'sha1' }), HtpasswdToolError);
+  await assert.rejects(() => htpasswdGenerateTool({ user: 'a', bulk: 'b:c' }), HtpasswdToolError);
+  await assert.rejects(() => htpasswdGenerateTool({ users: new Array(201).fill('a:b'), cost: 4 }), HtpasswdToolError);
+  await assert.rejects(() => htpasswdGenerateTool({ users: new Array(13).fill('a:b'), cost: 14 }), HtpasswdToolError);
+  await assert.rejects(() => htpasswdGenerateTool({ mode: 'verify', hash: 'x' }), HtpasswdToolError);
+  await assert.rejects(() => htpasswdGenerateTool({ user: 'a', lang: 'fr' }), HtpasswdToolError);
+
+  console.log('htpasswd_generate ok');
+}
+
+// ==================== openapi_doc_generate ====================
+{
+  // 期待値は site/openapi-doc-gen/core.js の oaGenerate で同じ入力から作った値（Web版と同じ出力になること）
+  const sha = (s) => oaCreateHash('sha256').update(s).digest('hex');
+  const SPEC = `openapi: 3.0.3
+info: { title: Pet Shop, version: 2.1.0, description: ペットを扱う架空のAPI。 }
+servers: [{ url: 'https://api.example.com/v2' }]
+tags: [{ name: pets, description: ペット }]
+paths:
+  /pets/{petId}:
+    parameters:
+      - { name: petId, in: path, required: true, schema: { type: integer, format: int64 } }
+    get:
+      tags: [pets]
+      operationId: get-pet
+      summary: ペットを1件取得する
+      parameters:
+        - { name: fields, in: query, schema: { type: array, items: { type: string } } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { $ref: '#/components/schemas/Pet' } } }
+        '404': { description: 見つからない }
+  /pets:
+    post:
+      operationId: createPet
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/NewPet' } } }
+      responses:
+        '201':
+          description: Created
+          content: { application/json: { schema: { $ref: '#/components/schemas/Pet' } } }
+components:
+  schemas:
+    NewPet:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, description: 名前 }
+        kind: { type: string, enum: [cat, dog], nullable: true }
+    Pet:
+      allOf:
+        - $ref: '#/components/schemas/NewPet'
+        - type: object
+          required: [id]
+          properties:
+            id: { type: integer, format: int64 }
+`;
+  const ja = oaGenerate({ text: SPEC, lang: 'ja' });
+  assert.equal(ja.ok, true);
+  assert.equal(ja.kind, 'openapi3');
+  assert.equal(ja.specVersion, '3.0.3');
+  assert.equal(ja.title, 'Pet Shop');
+  assert.equal(ja.endpoints, 2);
+  assert.equal(ja.schemas, 2);
+  assert.equal(sha(ja.markdown), 'f7e33330ccf9b231ce35b624d1aaa4281e21da132aed6187efba73f08e705cc3');
+  assert.equal(sha(ja.typescript), '772b05a00b7a6e24636b093f07e004ae9dfdf48a985839fa1fa063207362e73d');
+  assert.match(ja.markdown, /^# Pet Shop API リファレンス$/m);
+  assert.match(ja.markdown, /\| `petId` \| パス \| `integer\(int64\)` \| ○ \|/);
+  assert.match(ja.typescript, /^export type Pet = NewPet & \{$/m);
+  assert.match(ja.typescript, /^  kind\?: "cat" \| "dog" \| null;$/m);
+  const en = oaGenerate({ text: SPEC, lang: 'en', examples: false, operations: false });
+  assert.equal(sha(en.markdown), '133e6fd10b562e7b91d8b16936cf8f26728c18f412e27f89478a78b575000fb0');
+  assert.equal(sha(en.typescript), '39a5b39c28a5d5a4bad1b24c13032fee36a3f01f6d18ef1080ba735707bdb9a6');
+  assert.equal(oaFileBase('Pet Shop'), 'pet-shop');
+  assert.equal(oaFileBase(''), 'openapi');
+
+  // json_to_yaml との違いの1行: 折り返し行が「- 」で始まっても続きの文として読む
+  const fold = oaParseYaml('a:\n  description: The name\n    - for example, `x`\n    of the agent.\nb: 1\n');
+  assert.ok(fold.ok);
+  assert.equal(fold.value.a.description, 'The name - for example, `x` of the agent.');
+
+  // ツールのラッパー: 指摘・エラー・書き出し
+  const one = await openApiDocGenerateTool({ spec: SPEC });
+  assert.equal(one.ok, true);
+  assert.deepEqual(one.file_names, { markdown: 'pet-shop.md', typescript: 'pet-shop.ts' });
+  assert.equal(one.markdown, ja.markdown);
+  assert.equal(one.typescript, ja.typescript);
+  const tsOnly = await openApiDocGenerateTool({ spec: SPEC, output: 'typescript' });
+  assert.equal(tsOnly.markdown, undefined);
+  assert.equal(tsOnly.typescript, ja.typescript);
+  const refs = await openApiDocGenerateTool({
+    spec: 'openapi: 3.0.0\ninfo: {title: B, version: "1"}\npaths:\n  /x:\n    get:\n      operationId: a\n      responses: {"200": {description: ok, content: {application/json: {schema: {$ref: "other.yaml#/X"}}}}}\n  /y:\n    get:\n      operationId: a\n      responses: {"200": {description: ok}}\n',
+  });
+  assert.deepEqual(refs.notes.map((n) => [n.code, n.count, n.items]), [['OA_EXTERNAL_REF', 3, ['other.yaml#/X']], ['OA_DUP_OPERATION_ID', 1, ['a']]]);
+  assert.match(refs.notes[0].message, /別ファイル・URLを指す \$ref は読みに行きません（other\.yaml#\/X）/);
+  const bad = await openApiDocGenerateTool({ spec: 'openapi: 3.0.0\ninfo: {title: [x\n', lang: 'en' });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.error.code, 'YAML_UNTERMINATED_FLOW');
+  assert.equal(bad.error.line, 2);
+  assert.equal(bad.error.message, 'A "[" or "{" is never closed.');
+  assert.equal(bad.error.excerpt.rows[1].error, true);
+  const notSpec = await openApiDocGenerateTool({ spec: 'foo: 1\n' });
+  assert.equal(notSpec.error.code, 'OA_NOT_SPEC');
+  assert.equal(notSpec.error.line, undefined);
+  const s2 = await openApiDocGenerateTool({
+    spec: "swagger: '2.0'\ninfo: {title: S2, version: '1'}\npaths:\n  /u:\n    get:\n      responses:\n        200: {description: ok, schema: {$ref: '#/definitions/U'}}\ndefinitions:\n  U: {type: object, properties: {id: {type: string}}}\n",
+  });
+  assert.equal(s2.kind, 'swagger2');
+  assert.match(s2.typescript, /export interface U \{/);
+
+  const dir = await oaMkdtemp(oaJoin(oaTmpdir(), 'oa-test-'));
+  try {
+    const w = await openApiDocGenerateTool({ spec: SPEC, outputDir: dir });
+    assert.equal(w.markdown, undefined);
+    assert.equal(await oaReadFile(w.output.markdown, 'utf8'), ja.markdown);
+    assert.equal(await oaReadFile(w.output.typescript, 'utf8'), ja.typescript);
+    await assert.rejects(() => openApiDocGenerateTool({ spec: SPEC, outputDir: dir }), /overwrite/);
+    await openApiDocGenerateTool({ spec: SPEC, outputDir: dir, overwrite: true });
+    const fromFile = await openApiDocGenerateTool({ path: w.output.markdown.replace(/\.md$/, '.ts') });
+    assert.equal(fromFile.ok, false); // .ts は仕様書ではない
+  } finally {
+    await oaRm(dir, { recursive: true, force: true });
+  }
+  await assert.rejects(() => openApiDocGenerateTool({}), OpenApiDocToolError);
+  await assert.rejects(() => openApiDocGenerateTool({ spec: 'a', path: '/tmp/x' }), OpenApiDocToolError);
+  await assert.rejects(() => openApiDocGenerateTool({ path: 'relative.yaml' }), OpenApiDocToolError);
+  await assert.rejects(() => openApiDocGenerateTool({ spec: SPEC, lang: 'fr' }), OpenApiDocToolError);
+  await assert.rejects(() => openApiDocGenerateTool({ spec: SPEC, output: 'html' }), OpenApiDocToolError);
+  await assert.rejects(() => openApiDocGenerateTool({ spec: SPEC, outputDir: 'rel' }), OpenApiDocToolError);
+
+  console.log('openapi_doc_generate ok');
+}
+
+// ==================== faq_jsonld_generate ====================
+{
+  // 期待値は site/faq-jsonld/app.js（globalThis.__faqJsonld）で計算した値
+  const items = [
+    { q: '見積もりは無料ですか？', a: '無料です。' },
+    { q: '支払い方法は？', a: '次の方法に対応しています。\n- 銀行振込\n- クレジットカード\n\n詳しくは[料金のページ](https://example.com/price/)をご覧ください。' },
+  ];
+  const r = faqBuild(items, { title: 'よくある質問', level: 3 });
+  assert.equal(r.count, 2);
+  assert.equal(r.data.mainEntity[0].acceptedAnswer.text, '無料です。');
+  assert.equal(r.data.mainEntity[1].acceptedAnswer.text,
+    '<p>次の方法に対応しています。</p><ul><li>銀行振込</li><li>クレジットカード</li></ul><p>詳しくは<a href="https://example.com/price/">料金のページ</a>をご覧ください。</p>');
+  assert.equal(r.markdown,
+    '## よくある質問\n\n### 見積もりは無料ですか？\n\n無料です。\n\n### 支払い方法は？\n\n次の方法に対応しています。\n\n- 銀行振込\n- クレジットカード\n\n詳しくは[料金のページ](https://example.com/price/)をご覧ください。\n');
+  assert.equal(r.html,
+    '<section class="faq">\n  <h2>よくある質問</h2>\n  <details>\n    <summary>見積もりは無料ですか？</summary>\n    <div class="faq-answer">\n      <p>無料です。</p>\n    </div>\n  </details>\n  <details>\n    <summary>支払い方法は？</summary>\n    <div class="faq-answer">\n      <p>次の方法に対応しています。</p>\n      <ul><li>銀行振込</li><li>クレジットカード</li></ul>\n      <p>詳しくは<a href="https://example.com/price/">料金のページ</a>をご覧ください。</p>\n    </div>\n  </details>\n</section>\n');
+  assert.ok(r.jsonld.startsWith('<script type="application/ld+json">\n') && r.jsonld.endsWith('\n</script>'));
+  assert.ok(!r.json.includes('\\u3'), '日本語は \\u エスケープしない');
+  // プレーンテキストの回答（英語ではリンクを「文字 (URL)」、箇条書きを - に）
+  assert.equal(faqBuild(items, { answerFormat: 'text', lang: 'en' }).data.mainEntity[1].acceptedAnswer.text,
+    '次の方法に対応しています。\n\n- 銀行振込\n- クレジットカード\n\n詳しくは料金のページ (https://example.com/price/)をご覧ください。');
+  // 警告: 片方だけ空・重複・使えないリンク・相対リンク
+  assert.deepEqual(faqBuild([{ q: 'a', a: '[x](javascript:alert(1)) と [相対](/p/)' }, { q: 'A', a: 'b' }, { q: 'q only', a: '' }]).warnings,
+    [{ k: 'skipped', n: 1 }, { k: 'dup', list: [2] }, { k: 'bad', n: 1 }, { k: 'rel', n: 1 }]);
+  // </script> と <!-- で script が途切れない
+  const unsafe = faqBuild([{ q: 'x', a: '</script>\u2028<!--' }], { answerFormat: 'text' });
+  assert.ok(!/<\/script/i.test(unsafe.json) && !unsafe.json.includes('<!--'));
+  assert.equal(JSON.parse(unsafe.json).mainEntity[0].acceptedAnswer.text, '</script>\u2028<!--');
+  // 一括貼り付けの解析
+  assert.deepEqual(faqParseBulk('Q1. 送料は？\nA. 全国一律です。\n続きの行\n\n## 返品できますか？\nできます。\nＱ：最後\nＡ：はい'),
+    [{ q: '送料は？', a: '全国一律です。\n続きの行' }, { q: '返品できますか？', a: 'できます。' }, { q: '最後', a: 'はい' }]);
+  assert.deepEqual(faqParseAnswer('1. 一\n2. 二').blocks.map((b) => b.type), ['ol']);
+
+  // ツールのラッパー
+  const t = await faqJsonldTool({ items: [items[0]], bulk: 'Q: 送料は？\nA: 全国一律です。', wrap_script: false, exclusive: true, level: 2 });
+  assert.equal(t.count, 2);
+  assert.equal(t.parsed_from_bulk, 1);
+  assert.equal(JSON.parse(t.jsonld).mainEntity[1].name, '送料は？');
+  assert.match(t.html, /<details name="faq">/);
+  assert.match(t.markdown, /^## 送料は？$/m);
+  const tw = await faqJsonldTool({ items: [{ q: 'a', a: '[x](/p/)' }, { q: 'A', a: 'b' }], lang: 'en' });
+  assert.deepEqual(tw.warnings.map((w) => w.code), ['DUPLICATE', 'RELATIVE_LINK']);
+  assert.match(tw.warnings[0].message, /Duplicate question \(no\. 2\)/);
+  const empty = await faqJsonldTool({ items: [{ q: '', a: '' }] });
+  assert.equal(empty.jsonld, '');
+  assert.equal(empty.warnings[0].code, 'EMPTY');
+  await assert.rejects(() => faqJsonldTool({}), FaqJsonldToolError);
+  await assert.rejects(() => faqJsonldTool({ bulk: '質問ではない文章' }), FaqJsonldToolError);
+  await assert.rejects(() => faqJsonldTool({ items: [], level: 4 }), FaqJsonldToolError);
+  await assert.rejects(() => faqJsonldTool({ items: [], answer_format: 'md' }), FaqJsonldToolError);
+  await assert.rejects(() => faqJsonldTool({ items: [], lang: 'fr' }), FaqJsonldToolError);
+  await assert.rejects(() => faqJsonldTool({ items: [{ q: 'あ'.repeat(501), a: 'b' }] }), FaqJsonldToolError);
+  await assert.rejects(() => faqJsonldTool({ items: [{ q: 'a', a: 'あ'.repeat(5001) }] }), FaqJsonldToolError);
+  await assert.rejects(() => faqJsonldTool({ items: new Array(201).fill({ q: 'a', a: 'b' }) }), FaqJsonldToolError);
+
+  console.log('faq_jsonld_generate ok');
+}
+
+// ==================== lines_process ====================
+{
+  // 期待値は site/lines/app.js の processLines で計算した値
+  const sample = 'banana\napple\n  cherry  \nitem10\nitem2\n\nApple\nbanana\n10\n-3\n1.5\n1.25\nitem1\napple\n';
+  const us = processLines({ ...LINES_PRESETS.uniqsort, text: sample });
+  assert.equal(us.text, '-3\n1.25\n1.5\n10\napple\nApple\nbanana\ncherry\nitem1\nitem2\nitem10\n');
+  assert.deepEqual(us.stats, { lines_in: 14, trimmed: 1, blank_removed: 1, dup_removed: 2, lines_out: 11 });
+  assert.deepEqual(us.duplicates, [{ line: 'banana', count: 2 }, { line: 'apple', count: 2 }]);
+  assert.deepEqual(us.notes, [{ code: 'NEAR_CASE', count: 1 }]);
+  // 降順・重複だけ（大文字小文字を区別しない）・ゼロ埋めの番号・シード付きシャッフル
+  assert.equal(processLines({ text: sample, trim: true, removeBlank: true, sort: 'desc' }).text,
+    'item10\nitem2\nitem1\ncherry\nbanana\nbanana\nApple\napple\napple\n10\n1.5\n1.25\n-3\n');
+  assert.equal(processLines({ text: sample, dedupe: true, dedupeMode: 'dupes', ignoreCase: true, trim: true }).text, 'banana\napple\n');
+  assert.equal(processLines({ text: 'a\nb\n\nc\n', removeBlank: true, number: true, start: 8, pad: true, sep: 'bracket' }).text, '(08) a\n(09) b\n(10) c\n');
+  assert.equal(processLines({ ...LINES_PRESETS.shuffle, seed: 7, text: sample }).text,
+    'Apple\n1.5\nitem1\n-3\ncherry\napple\n10\nitem10\nitem2\nbanana\n1.25\napple\nbanana\n');
+  assert.equal(processLines({ ...LINES_PRESETS.mdlist, text: ' a \nb' }).text, '- a\n- b');
+  // 日本語の並び・改行コードは入力の最初のものに揃える・全角半角だけ違う行
+  assert.equal(processLines({ text: 'りんご\nバナナ\n商品10\n商品2\nみかん\n商品1\n', sort: 'asc' }).text, 'バナナ\nみかん\nりんご\n商品1\n商品2\n商品10\n');
+  const crlf = processLines({ text: 'b\r\na\r\nb\r\n', dedupe: true, sort: 'asc' });
+  assert.equal(crlf.text, 'a\r\nb\r\n');
+  assert.deepEqual(processLines({ text: 'Ａ\nA\nｶ\nカ\n a\n' }).notes, [{ code: 'NEAR_WIDTH', count: 2 }]);
+  assert.deepEqual(processLines({ text: '１２\n３\n−５\n1,000\n999\n', sort: 'asc' }).text, '−５\n３\n１２\n999\n1,000\n');
+  assert.equal(processLines({ text: '' }).notes[0].code, 'NOTHING');
+
+  // ツールのラッパー
+  const r = await linesProcessTool({ text: sample, preset: 'uniqsort', sort: 'desc' });
+  assert.equal(r.text, 'item10\nitem2\nitem1\ncherry\nbanana\nApple\napple\n10\n1.5\n1.25\n-3\n');
+  assert.deepEqual(r.notes.map((n) => n.code), ['DUPS', 'NEAR_CASE']);
+  assert.equal(r.eol, 'LF');
+  const crlfTool = await linesProcessTool({ text: 'b\r\na\r\n', sort: 'asc', prefix: '* ', lang: 'en' });
+  assert.equal(crlfTool.text, '* a\r\n* b\r\n');
+  assert.equal(crlfTool.eol, 'CRLF');
+  const sh = await linesProcessTool({ text: 'a\nb\nc\nd\n', sort: 'shuffle' });
+  assert.deepEqual(sh.text.split('\n').slice(0, 4).sort(), ['a', 'b', 'c', 'd']);
+  assert.equal(sh.notes.at(-1).code, 'RANDOM');
+  const shs = await linesProcessTool({ text: sample, preset: 'shuffle', seed: 7 });
+  assert.equal(shs.text, 'Apple\n1.5\nitem1\n-3\ncherry\napple\n10\nitem10\nitem2\nbanana\n1.25\napple\nbanana\n');
+  const dm = await linesProcessTool({ text: 'x\ny\nx\n', dedupeMode: 'unique' });
+  assert.equal(dm.text, 'y\n');
+  await assert.rejects(() => linesProcessTool({}), LinesToolError);
+  await assert.rejects(() => linesProcessTool({ text: 'a', path: '/tmp/a' }), LinesToolError);
+  await assert.rejects(() => linesProcessTool({ text: 'a', sort: 'random' }), LinesToolError);
+  await assert.rejects(() => linesProcessTool({ text: 'a', preset: 'nope' }), LinesToolError);
+  await assert.rejects(() => linesProcessTool({ text: 'a', seed: -1 }), LinesToolError);
+  await assert.rejects(() => linesProcessTool({ path: 'relative.txt' }), LinesToolError);
+  await assert.rejects(() => linesProcessTool({ text: 'a', lang: 'fr' }), LinesToolError);
+
+  console.log('lines_process ok');
+}
+
+// ==================== dpi_calc ====================
+// 期待値は FirstCHTools の site/dpi/app.js で同じ入力から出した値（画面の表示・入稿メモ・指摘の文言まで一致を確認済み）
+{
+  // コア: A4・350dpi・塗り足し3mm（端数は切り上げ）
+  const a4 = dpiCalc({ widthMm: 210, heightMm: 297, dpi: 350, bleedMm: 3 });
+  assert.equal(a4.trimWidth, 2894);
+  assert.equal(a4.trimHeight, 4093);
+  assert.equal(a4.width, 2977);
+  assert.equal(a4.height, 4176);
+  assert.equal(a4.bytesCmyk, 49727808);
+  assert.equal(dpBytes(a4.bytesCmyk), '47.4 MB');
+  // ちょうど割り切れる寸法は切り上げない（25.4mm × 300dpi = 300px）
+  assert.equal(dpiCalc({ widthMm: 25.4, heightMm: 50.8, dpi: 300 }).trimWidth, 300);
+  assert.equal(dpiCalc({ widthMm: 25.4, heightMm: 50.8, dpi: 300 }).trimHeight, 600);
+  assert.equal(dpiCalc({ widthMm: 0, heightMm: 10, dpi: 300 }), null);
+  assert.equal(dpiCalc({ widthMm: 10, heightMm: 10, dpi: 4801 }), null);
+  assert.equal(dpNum('4,000px'), 4000);
+  assert.ok(Number.isNaN(dpNum('abc')));
+  assert.equal(dpFmt(300, 2), '300');
+  assert.equal(dpFmt(2893.70078, 1), '2893.7');
+  // 向き: 名刺は既定で横
+  assert.deepEqual(paperSize(paperByKey('meishi'), 'landscape'), { w: 91, h: 55 });
+  assert.equal(PAPERS.length, 28);
+  // 逆算・実効dpi（用紙は有利な向きを選ぶ）・判定
+  const rv = dpiReverse({ width: 4000, height: 3000, dpi: 350 });
+  assert.equal(dpFmt(rv.widthMm, 1), '290.3');
+  const eff = dpiFor({ width: 4000, height: 3000, widthMm: 210, heightMm: 297, bleedMm: 3 });
+  assert.equal(dpFmt(eff.dpi, 0), '335');
+  assert.equal(eff.rotated, true);
+  assert.equal(dpiGrade(350), 'best');
+  assert.equal(dpiGrade(300), 'ok');
+  assert.equal(dpiGrade(200), 'fair');
+  assert.equal(dpiGrade(199.9), 'ng');
+  assert.equal(dpiTable(TABLE_KEYS, 350, 3).length, 12);
+
+  // ツール: size（既定 A4・350dpi・3mm）
+  const size = await dpiCalcTool({});
+  assert.equal(size.mode, 'size');
+  assert.equal(size.paper_label, 'A4（210 × 297 mm）');
+  assert.equal(size.display.full, '2,977 × 4,176 px');
+  assert.equal(size.memo, '【入稿データの仕様】\n用紙: A4（210 × 297 mm）\n解像度: 350 dpi\n仕上がり: 2,894 × 4,093 px\n塗り足し: 3 mm\n塗り足し込み: 2,977 × 4,176 px\n非圧縮でのデータ量: RGB 35.6 MB / CMYK 47.4 MB');
+  assert.deepEqual(size.notes.map((n) => n.code), ['STANDARD', 'BLEED', 'SAFE_AREA', 'ROUNDED_UP', 'DATA_SIZE', 'CMYK']);
+  assert.equal(size.notes[3].message, '正確には 2893.7 × 4092.5px で、切り上げて 2,894 × 4,093px にしています。端数は必ず切り上げてください。1px足りないと端に白い線が残ります。');
+  // 名刺は横向き・塗り足しなし・72dpi は画面向け
+  const card = await dpiCalcTool({ paper: 'MEISHI', dpi: '72', bleedMm: 0, lang: 'en' });
+  assert.equal(card.orientation, 'landscape');
+  assert.equal(card.display.trim, '258 × 156 px');
+  assert.deepEqual(card.notes.slice(0, 2).map((n) => n.code), ['VERY_LOW', 'NO_BLEED']);
+  assert.match(card.notes[0].message, /^72 dpi is a screen resolution\. .* about 4\.9 to reach 350 dpi\.$/);
+  // 大判: PSD の上限超え
+  const banner = await dpiCalcTool({ widthMm: 3000, heightMm: 900, dpi: 300 });
+  assert.equal(banner.paper, 'custom');
+  assert.ok(banner.notes.some((n) => n.code === 'PSB_REQUIRED'));
+  // reverse（width/height を渡すと既定）
+  const rev = await dpiCalcTool({ width: 4000, height: 3000 });
+  assert.equal(rev.mode, 'reverse');
+  assert.equal(rev.print_size, '290 × 218 mm');
+  assert.equal(rev.effective.display, '335 dpi');
+  assert.equal(rev.effective.grade, 'ok');
+  assert.deepEqual(rev.effective.needed_at_350, { width: 4176, height: 2977 });
+  assert.equal(rev.notes.find((n) => n.code === 'SHORT').message, 'A4 では335dpiになります。350dpiにするには 4,176 × 2,977 px が必要です。');
+  assert.equal(rev.papers.length, 12);
+  assert.deepEqual(rev.papers[0], { paper: 'A2', label: 'A2（420 × 594 mm）', dpi: rev.papers[0].dpi, display: '169 dpi', grade: 'ng', grade_label: '不足', rotated: true });
+  const fits = await dpiCalcTool({ width: 6000, height: 4000, paper: 'A5' });
+  assert.equal(fits.notes.find((n) => n.code === 'FITS').message, 'A5 に660dpiで使えます。');
+  // table（3形式）
+  const tmd = await dpiCalcTool({ mode: 'table', format: 'md', papers: ['a4', 'meishi'] });
+  assert.equal(tmd.text, '| 用紙 | サイズ（mm） | 仕上がり（px） | 塗り足し込み（px） |\n| --- | ---: | ---: | ---: |\n| A4 | 210 × 297 | 2894 × 4093 | 2977 × 4176 |\n| 名刺 | 91 × 55 | 1254 × 758 | 1337 × 841 |');
+  const tcsv = await dpiCalcTool({ mode: 'table', format: 'csv', dpi: 300, bleedMm: 0, papers: ['A4'], lang: 'en' });
+  assert.equal(tcsv.text, 'paper,width_mm,height_mm,trim_width_px,trim_height_px,bleed_width_px,bleed_height_px,dpi,bleed_mm\nA4,210,297,2481,3508,2481,3508,300,0');
+  const ttxt = await dpiCalcTool({ mode: 'table', papers: ['HAGAKI'], lang: 'en' });
+  assert.equal(ttxt.text, '350 dpi / Bleed 3 mm\nPostcard: 1,378 × 2,040 px (With bleed 1,461 × 2,123 px)');
+  // units（value を渡すと既定）
+  const u = await dpiCalcTool({ value: 210 });
+  assert.equal(u.mode, 'units');
+  assert.deepEqual(u.display, { mm: '210 mm', cm: '21 cm', inch: '8.2677 in', px: '2893.7 px', pt: '595.28 pt', q: '840 Q' });
+  const upx = await dpiCalcTool({ value: '1000px', from: 'px', dpi: 96 });
+  assert.equal(upx.display.mm, '264.583 mm');
+  // papers
+  const pl = await dpiCalcTool({ mode: 'papers' });
+  assert.equal(pl.groups.length, 6);
+  assert.equal(pl.groups[2].papers[0].label, '名刺（日本・4号） — 91 × 55 mm');
+  // 壊れた引数
+  await assert.rejects(() => dpiCalcTool({ paper: 'A9' }), DpiToolError);
+  await assert.rejects(() => dpiCalcTool({ dpi: 0 }), DpiToolError);
+  await assert.rejects(() => dpiCalcTool({ dpi: 5000 }), DpiToolError);
+  await assert.rejects(() => dpiCalcTool({ bleedMm: 101 }), DpiToolError);
+  await assert.rejects(() => dpiCalcTool({ widthMm: 100 }), DpiToolError);
+  await assert.rejects(() => dpiCalcTool({ paper: 'A4', widthMm: 100, heightMm: 100 }), DpiToolError);
+  await assert.rejects(() => dpiCalcTool({ orientation: 'up' }), DpiToolError);
+  await assert.rejects(() => dpiCalcTool({ width: 0, height: 10 }), DpiToolError);
+  await assert.rejects(() => dpiCalcTool({ mode: 'table', format: 'xlsx' }), DpiToolError);
+  await assert.rejects(() => dpiCalcTool({ mode: 'units', value: 'x' }), DpiToolError);
+  await assert.rejects(() => dpiCalcTool({ value: 1, from: 'ft' }), DpiToolError);
+  await assert.rejects(() => dpiCalcTool({ mode: 'x' }), DpiToolError);
+  await assert.rejects(() => dpiCalcTool({ lang: 'fr' }), DpiToolError);
+
+  console.log('dpi_calc ok');
+}
+
+// ==================== serp_check ====================
+{
+  // 字幅: Arial の字幅表（unitsPerEm 2048）と和文1em・半角カナ0.5em
+  assert.equal(serpMeasure('a', 20), (1139 * 20) / 2048);
+  assert.equal(serpMeasure('W', 14), (1933 * 14) / 2048);
+  assert.equal(serpMeasure('あ漢｜', 20), 60);
+  assert.equal(serpMeasure('ｱ', 14), 7);
+  // 下の幅は macOS の Chrome で site/serp/app.js の measure()（canvas）と一致した値（カーニングの無い文字列）
+  assert.equal(Math.round(serpMeasure('This page explains how Google truncates titles and meta descriptions by pixel width rather than character count, and how to keep the important words visible in the search result snippet on both desktop and mobile.', 20) * 100) / 100, 1887.73);
+  assert.equal(Math.round(serpMeasure('東京都渋谷区のWeb制作会社｜First CH合同会社', 20)), 434);
+
+  // 行分割と切り詰め（site と同じ入力で Chrome 実測と同じ結果になったもの）
+  const longTitle = 'SERPプレビュー＆メタタグ文字数チェック｜title・descriptionのピクセル幅を実測 | First CH Tools';
+  assert.deepEqual(serpLayout(longTitle, 600, 20, 1).lines, ['SERPプレビュー＆メタタグ文字数チェック｜title・description…']);
+  assert.equal(serpLayout(longTitle, 600, 20, 1).cut, 'のピクセル幅を実測 | First CH Tools');
+  assert.deepEqual(serpLayout(longTitle, 380, 20, 2).lines, ['SERPプレビュー＆メタタグ文字数チェッ', 'ク｜title・descriptionのピクセル幅を実…']);
+  assert.equal(serpLayout('', 600, 20, 1).truncated, false);
+  // 禁則: 行頭の「。」はぶら下げ、行末の「（」は次の行へ
+  assert.ok(serpWrap('あ'.repeat(30) + '。', 600, 20).length === 1);
+  assert.deepEqual(serpWrap('あ'.repeat(29) + '（い）', 600, 20), ['あ'.repeat(29), '（い）']);
+  // URL のパンくず
+  assert.deepEqual(serpUrlParts('www.example.com/%E3%83%96%E3%83%AD%E3%82%B0/a'), { host: 'example.com', segs: ['ブログ', 'a'], protocol: 'https:', raw: 'www.example.com/%E3%83%96%E3%83%AD%E3%82%B0/a' });
+  assert.equal(serpUrlParts(''), null);
+
+  // 判定
+  const j = serpJudge({ title: '東京都渋谷区のWeb制作会社｜First CH合同会社', description: '検索結果に表示される説明文です。', url: 'example.com/blog/2026/10/post' }, 'desktop');
+  assert.equal(j.title.state, 'ok');
+  assert.equal(j.description.state, 'short');
+  assert.deepEqual(j.checks, [['warn', 'DESC_SHORT'], ['warn', 'URL_LONG']]);
+  assert.deepEqual(serpJudge({}, 'mobile').checks, [['fail', 'TITLE_EMPTY'], ['fail', 'DESC_EMPTY'], ['warn', 'URL_EMPTY']]);
+  assert.deepEqual(serpJudge({ title: 'タイトルだけで区切りの無い見出しを少し長めに書いておく', description: 'x', url: 'http://a.com/%20' }, 'desktop').checks.map((c) => c[1]),
+    ['TITLE_NO_BRAND', 'DESC_SHORT', 'URL_HTTP', 'URL_ENCODED']);
+
+  // ツールのラッパー
+  const one = await serpCheckTool({ title: '東京都渋谷区のWeb制作会社｜First CH合同会社', description: '検索結果に表示される説明文です。', url: 'example.com/blog/2026/10/post' });
+  assert.equal(one.title.width_px, 434);
+  assert.equal(one.title.limit_px, 600);
+  assert.equal(one.title.chars, 27);
+  assert.equal(one.url.breadcrumb, 'example.com › blog › 2026 › 10 › post');
+  assert.equal(one.pass, false);
+  assert.equal(one.checks[0].message, '説明文に余裕があります。もう1文入ります。');
+  assert.equal(one.tags, '<title>東京都渋谷区のWeb制作会社｜First CH合同会社</title>\n<meta name="description" content="検索結果に表示される説明文です。">\n<link rel="canonical" href="example.com/blog/2026/10/post">');
+  const both = await serpCheckTool({ title: longTitle, device: 'both', lang: 'en' });
+  assert.equal(both.desktop.title.truncated, true);
+  assert.equal(both.mobile.title.lines.length, 2);
+  assert.deepEqual(both.desktop.checks.map((c) => c.code), ['TITLE_CUT', 'DESC_EMPTY', 'URL_EMPTY']);
+  assert.match(both.desktop.checks[0].message, /The title is cut off/);
+  const many = await serpCheckTool({ items: [{ title: 'a' }, { title: 'Page | Site', description: 'x'.repeat(100), url: 'https://a.com/' }] });
+  assert.equal(many.count, 2);
+  assert.equal(many.passed, 0);
+  assert.deepEqual(many.results[1].checks.map((c) => c.code), ['TITLE_SHORT']);
+  await assert.rejects(() => serpCheckTool({}), SerpToolError);
+  await assert.rejects(() => serpCheckTool({ title: 'a', device: 'tablet' }), SerpToolError);
+  await assert.rejects(() => serpCheckTool({ title: 'a', lang: 'fr' }), SerpToolError);
+  await assert.rejects(() => serpCheckTool({ items: [] }), SerpToolError);
+  await assert.rejects(() => serpCheckTool({ items: [{}], title: 'a' }), SerpToolError);
+  await assert.rejects(() => serpCheckTool({ items: new Array(501).fill({}) }), SerpToolError);
+
+  console.log('serp_check ok');
+}
+
+// ==================== css_layout_generate ====================
+// 期待値は FirstCHTools の site/css-layout/app.js で同じ指定から出した値（CSS・HTML・指摘の文言まで一致を確認済み）
+{
+  const T = CL_TEXT.ja;
+  // トラックの repeat() 畳み込み
+  assert.equal(tracksToCss(['1fr', '1fr', '1fr', '240px', '240px', 'auto']), 'repeat(3, 1fr) repeat(2, 240px) auto');
+  assert.equal(tracksToCss([]), 'none');
+  // grid-template-areas の検証
+  assert.deepEqual(parseAreas('header header\nside main', T), {
+    grid: [['header', 'header'], ['side', 'main']], rows: 2, cols: 2, names: ['header', 'side', 'main'],
+  });
+  assert.equal(parseAreas('a a\nb a', T).error, 'エリア「a」が長方形になっていません。名前がL字や分断された形になると、CSSは grid-template-areas の値全体を捨てます。');
+  assert.equal(parseAreas('a b c\nd e', T).error, 'grid-template-areas は全ての行のマス数を揃える必要があります（2行目が2マス）。');
+  assert.equal(parseAreas('1a b', T).error, '「1a」はエリア名に使えません（英数字・- ・_ のみ。「.」1文字だけは空きマスの意味）。');
+  assert.equal(parseAreas('  \n ', T).error, T.areaErrEmpty);
+  assert.deepEqual(parseAreas('"a . b"', T).names, ['a', 'b']);
+  // 状態を直接渡す（site の state と同じ形）
+  const st = defaultState();
+  assert.equal(buildCss(st, null), '.layout {\n  display: flex;\n  flex-direction: row;\n  flex-wrap: wrap;\n  gap: 12px;\n}');
+  assert.equal(buildHtml(st, null), '<div class="layout">\n  <div class="item">1</div>\n  <div class="item">2</div>\n  <div class="item">3</div>\n  <div class="item">4</div>\n</div>');
+  assert.equal(diagnose(st, null, T).length, 3);
+  assert.equal(PRESETS.length, PRESET_IDS.length);
+  assert.equal(applyPreset(defaultState(), PRESETS[3]).mode, 'grid');
+
+  // ツール: 既定（flex）
+  const def = await cssLayoutGenerateTool({});
+  assert.equal(def.mode, 'flex');
+  assert.equal(def.css, buildCss(defaultState(), null));
+  assert.equal(def.declarations, 4);
+  assert.equal(def.css_length, 83);
+  assert.deepEqual(def.notes.map((n) => n.level), ['info', 'info', 'info']);
+  // flex: 効かない組み合わせの指摘と子要素ごとの宣言
+  const f = await cssLayoutGenerateTool({
+    wrap: 'nowrap', justifyContent: 'space-between', alignContent: 'center', direction: 'row-reverse', rowGap: 8, colGap: 16, count: 3,
+    items: [{ grow: 1, basis: '0' }, null, { shrink: 2, alignSelf: 'center', order: -1 }],
+  });
+  assert.equal(f.css, '.layout {\n  display: flex;\n  flex-direction: row-reverse;\n  justify-content: space-between;\n  gap: 8px 16px;\n}\n\n.layout > :nth-child(1) {\n  flex: 1 1 0;\n}\n\n.layout > :nth-child(3) {\n  flex: 0 2 auto;\n  align-self: center;\n  order: -1;\n}');
+  assert.deepEqual(f.notes.slice(0, 3).map((n) => n.message), [T.justifyDead, T.alignContentDead, T.reverseNote]);
+  assert.equal(f.notes.length, 9);
+  assert.equal(f.hints['flex-direction'], '主軸は右→左。HTMLで最初の子要素が右端に描かれます。');
+  // grid: columns を渡すと grid
+  const g = await cssLayoutGenerateTool({ columns: ['1fr', '1fr', '1fr', '240px'], gap: 16, justifyContent: 'center', items: [{ columnSpan: 2, rowSpan: 2 }] });
+  assert.equal(g.mode, 'grid');
+  assert.equal(g.css, '.layout {\n  display: grid;\n  grid-template-columns: repeat(3, 1fr) 240px;\n  gap: 16px;\n  justify-content: center;\n}\n\n.layout > :nth-child(1) {\n  grid-column: span 2;\n  grid-row: span 2;\n}');
+  assert.equal(g.tracks, 4);
+  const fr = await cssLayoutGenerateTool({ mode: 'grid', columns: ['1fr', '2fr'], justifyContent: 'center' });
+  assert.ok(fr.notes.some((n) => n.message === T.noFreeSpace));
+  // grid: areas（" / " 区切り）と、列トラック数の食い違い
+  const ar = await cssLayoutGenerateTool({ areas: 'header header / side main', lang: 'en' });
+  assert.deepEqual(ar.areas, { rows: 2, cols: 2, names: ['header', 'side', 'main'] });
+  assert.equal(ar.css, '.layout {\n  display: grid;\n  grid-template-columns: repeat(3, 1fr);\n  grid-template-areas:\n    "header header"\n    "side   main";\n  gap: 12px;\n}\n\n.layout > .header {\n  grid-area: header;\n}\n\n.layout > .side {\n  grid-area: side;\n}\n\n.layout > .main {\n  grid-area: main;\n}');
+  assert.equal(ar.html, '<div class="layout">\n  <div class="header">header</div>\n  <div class="side">side</div>\n  <div class="main">main</div>\n</div>');
+  assert.equal(ar.notes[0].message, '2 × 2 cells, 3 named areas.');
+  assert.equal(ar.notes[1].message, 'grid-template-columns has 3 tracks but the area rows have 2 cells. The extra cells fall into implicit tracks sized by grid-auto-columns (auto).');
+  // 長方形でないエリアは警告し、エリアなしの CSS を出す（site と同じ）
+  const bad = await cssLayoutGenerateTool({ areas: 'a a / b a' });
+  assert.equal(bad.areas.error, parseAreas('a a\nb a', T).error);
+  assert.equal(bad.notes[0].level, 'warn');
+  assert.equal(bad.css, '.layout {\n  display: grid;\n  grid-template-columns: repeat(3, 1fr);\n  gap: 12px;\n}');
+  // auto-fit・dense
+  const af = await cssLayoutGenerateTool({ autoFit: true, autoFitMin: 160, flow: 'row dense' });
+  assert.match(af.css, /grid-template-columns: repeat\(auto-fit, minmax\(160px, 1fr\)\);/);
+  assert.equal(af.tracks, 'auto-fit');
+  assert.ok(af.notes.some((n) => n.message === T.dense && n.level === 'warn'));
+  // プリセット
+  const hg = await cssLayoutGenerateTool({ preset: 'holy-grail' });
+  assert.equal(hg.mode, 'grid');
+  assert.deepEqual(hg.areas.names, ['header', 'nav', 'main', 'aside', 'footer']);
+  assert.match(hg.css, /^ {4}"nav    main   aside"$/m);
+  const card = await cssLayoutGenerateTool({ preset: 'card-row', count: 2 });
+  assert.equal(card.css, '.layout {\n  display: flex;\n  flex-direction: row;\n  flex-wrap: wrap;\n  gap: 16px;\n}\n\n.layout > :nth-child(1) {\n  flex: 1 1 240px;\n}\n\n.layout > :nth-child(2) {\n  flex: 1 1 240px;\n}');
+  const all = await cssLayoutGenerateTool({ mode: 'presets', lang: 'en' });
+  assert.deepEqual(all.presets.map((p) => p.id), PRESET_IDS);
+  assert.equal(all.presets[1].name, 'Header (ends + middle)');
+  // 壊れた引数
+  await assert.rejects(() => cssLayoutGenerateTool({ direction: 'up' }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ alignItems: 'start' }), CssLayoutError); // flex には start が無い
+  await assert.rejects(() => cssLayoutGenerateTool({ mode: 'grid', alignItems: 'baseline' }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ gap: 81 }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ count: 9 }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ mode: 'grid', count: 13 }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ columns: [] }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ columns: ['1fr; color: red'] }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ items: [{ grow: 6 }] }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ items: [{ basis: 'calc(1px' }] }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ items: new Array(9).fill(null) }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ direction: 'row', areas: 'a' }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ mode: 'grid', wrap: 'wrap' }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ preset: 'x' }), CssLayoutError);
+  await assert.rejects(() => cssLayoutGenerateTool({ lang: 'fr' }), CssLayoutError);
+
+  console.log('css_layout_generate ok');
 }
 
 console.log('all tests passed');

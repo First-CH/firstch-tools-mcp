@@ -4,6 +4,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
+import { APP_TOOLS, callAppTool } from './apps.mjs';
 import { appendFile } from 'node:fs/promises';
 import { writeOutput } from './fs-safe.mjs';
 import { createRequire } from 'node:module';
@@ -37,6 +38,13 @@ import { dateCalcTool } from './date-calc.mjs';
 import { htmlToMarkdownTool } from './html-md.mjs';
 import { warekiConvertTool } from './wareki.mjs';
 import { slugGenerateTool } from './slug.mjs';
+import { htpasswdGenerateTool } from './htpasswd.mjs';
+import { openApiDocGenerateTool } from './openapi-doc.mjs';
+import { faqJsonldTool } from './faq-jsonld.mjs';
+import { linesProcessTool } from './lines.mjs';
+import { dpiCalcTool } from './dpi.mjs';
+import { serpCheckTool } from './serp.mjs';
+import { cssLayoutGenerateTool } from './css-layout.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 // SDK v2 の serveStdio は接続ごとに factory から McpServer を1つ作る（旧仕様の initialize と
@@ -56,7 +64,7 @@ function buildServer() {
 // 常にファイルを書くツール（webp_convert・marp_render）は readOnlyHint: false・destructiveHint: true
 // （overwrite: true を渡すと既存ファイルを上書きしうるため）。既定では上書きしない。
 // それ以外は手元で計算する（または利用者が指定したファイルを読む）だけなので readOnlyHint: true。
-// 外部と通信しうるのは marp_render の allowRemote: true のときだけ。
+// 外部と通信しうるのは marp_render の allowRemote: true のときと、apps.first-ch.com へ送る app_* ツール。
 // ---------------------------------------------------------------------------
 const ALWAYS_WRITES = new Set(['webp_convert', 'marp_render']);
 const OPEN_WORLD = new Set(['marp_render']);
@@ -93,6 +101,26 @@ const logUsage = (tool) =>
   USAGE_LOG
     ? appendFile(USAGE_LOG, JSON.stringify({ ts: new Date().toISOString(), tool, source: 'mcp' }) + '\n').catch(() => {})
     : Promise.resolve();
+
+// ---------------------------------------------------------------------------
+// apps.first-ch.com の API を呼ぶツール（app_*）。定義表と HTTP 呼び出しは apps.mjs に置き、
+// ここではまとめて登録するだけにする。他のツールと違い入力を apps.first-ch.com へ送るので、
+// openWorldHint: true を付ける（端末のファイルは書き換えないので readOnlyHint: true のまま）。
+// ---------------------------------------------------------------------------
+// 既定では登録しない（端末内で完結するツールだけを出す）。入力を外へ送るツールは、利用者が
+// FIRSTCH_ENABLE_APPS=1 で明示的に有効にしたときだけ出す（「既定では外部へ通信しない」を崩さないため・2026-10-21）
+const APPS_ENABLED = /^(1|true|yes|on)$/i.test(process.env.FIRSTCH_ENABLE_APPS ?? '');
+for (const def of APPS_ENABLED ? APP_TOOLS : []) {
+  OPEN_WORLD.add(def.name);
+  registerTool(
+    def.name,
+    { title: def.title, description: def.description, inputSchema: def.inputSchema },
+    async (args) => {
+      await logUsage(def.name);
+      return asText(await callAppTool(def, args, { version }));
+    },
+  );
+}
 
 registerTool(
   'contrast_check',
@@ -1602,6 +1630,299 @@ registerTool(
   async (opts) => {
     await logUsage('slug_generate');
     return asText(await slugGenerateTool(opts));
+  },
+);
+
+registerTool(
+  'htpasswd_generate',
+  {
+    title: 'htpasswd 生成・照合（Basic認証）',
+    description:
+      'Basic認証用の htpasswd の行を作る（tools.first-ch.com/htpasswd/ と同一ロジック）。' +
+      'ステージングサイト・納品前の確認環境に Basic 認証を掛けるときに使う。' +
+      'ハッシュは bcrypt（$2y$・Apache の htpasswd -B と同じ・既定コスト5）か apr1-md5（$apr1$・Apache 2.2 など bcrypt を読めない環境向け）。' +
+      '1人なら user と password、まとめて作るなら users（文字列 "user:pass" か {user, password}）か bulk（1行1人の「ユーザー名:パスワード」・# で始まる行と空行は飛ばす）を渡す（200人まで）。' +
+      '**パスワードが空のユーザーは16文字のパスワードを自動生成し、generated で返す**（紛らわしい字 0 O o 1 l I を除いた CSPRNG）。利用者が渡したパスワードは結果に繰り返さない。' +
+      '「:」を含む・空・255バイト超のユーザー名は飛ばし、重複・12文字未満・ユーザー名と同じ・前後の空白・全角文字・bcrypt の72バイト超（以降は無視される）を notes で指摘する。' +
+      'server（apache / nginx）を渡すと .htaccess か nginx の設定スニペットも返す（file・realm・認証なしで通す ips〔IPv4 / IPv6 / CIDR〕を反映。空白を含むパスは引用し、読めないIPは外して指摘）。' +
+      'mode="verify" か hash を渡すと、既存の htpasswd の1行（またはハッシュ）と password を照合する（$2y$/$2b$/$2a$・$apr1$・$1$・{SHA}。コスト15以上の bcrypt は照合しない）。' +
+      'outputPath を渡すと htpasswd の中身をファイルへ書き出す（本文は返さない）。パスワードはどこにも記録しない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      mode: z.enum(['generate', 'verify']).optional().describe('処理の種類（省略時は hash があれば verify、無ければ generate）'),
+      user: z.string().optional().describe('1人ぶんのユーザー名（users・bulk と排他）'),
+      password: z.string().optional().describe('user のパスワード（空なら自動生成）。mode=verify では照合するパスワード'),
+      users: z
+        .array(z.union([z.string(), z.object({ user: z.string(), password: z.string().optional() })]))
+        .optional()
+        .describe('まとめて作る（200人まで）。"user:pass" の文字列か {user, password}。パスワード省略で自動生成'),
+      bulk: z.string().optional().describe('1行1人の「ユーザー名:パスワード」（パスワードに : を含んでよい・空なら自動生成）'),
+      algo: z.enum(['bcrypt', 'apr1']).optional().describe("ハッシュ方式（既定 'bcrypt'）"),
+      cost: z.number().int().optional().describe('bcrypt のコスト（4〜14・既定 5＝htpasswd -B の既定。11以上は全リクエストが遅くなる）'),
+      server: z.enum(['apache', 'nginx']).optional().describe('渡すと .htaccess / nginx の設定スニペットも返す（user 等を省けばスニペットだけ）'),
+      file: z.string().optional().describe('htpasswd を置くサーバー上の絶対パス（既定 apache=/home/example/.htpasswd・nginx=/etc/nginx/.htpasswd）'),
+      realm: z.string().optional().describe('認証領域名 AuthName（既定 Restricted Area）'),
+      ips: z.union([z.string(), z.array(z.string())]).optional().describe('認証なしで通すIP・CIDR（空白・カンマ区切りの文字列か配列）'),
+      hash: z.string().optional().describe('mode=verify で照合する htpasswd の1行（またはハッシュだけ）'),
+      outputPath: z.string().optional().describe('htpasswd の中身を書き出す絶対パス（指定すると htpasswd は返さない）'),
+      lang: z.enum(['ja', 'en']).optional().describe("指摘事項の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('htpasswd_generate');
+    return asText(await htpasswdGenerateTool(opts));
+  },
+);
+
+registerTool(
+  'openapi_doc_generate',
+  {
+    title: 'OpenAPI → 日本語ドキュメント＆TypeScript型定義',
+    description:
+      'OpenAPI 3.x / Swagger 2.0 の仕様書（YAML か JSON）から、日本語（lang="en" で英語）の Markdown APIリファレンスと ' +
+      'TypeScript の型定義を作る（tools.first-ch.com/openapi-doc-gen/ と同一ロジック）。' +
+      '受け取った仕様書を顧客・チーム向けの読める資料にする、フロントエンドの型を手書きせずに起こす、といった用途に使う。' +
+      'Markdown はベースURL・エンドポイント一覧・タグごとのパラメータ／リクエスト／レスポンスの表・スキーマ一覧を含み、' +
+      '例が書かれていないレスポンスにはスキーマから例を作る（examples=false で切る）。' +
+      'TypeScript は components.schemas（Swagger は definitions）を interface / type にし、' +
+      'operations=true（既定）ならエンドポイントごとの Params / RequestBody / Response の型も出す。' +
+      '$ref・allOf / oneOf / anyOf・enum・nullable・additionalProperties に対応し、TypeScript の予約語や重複する名前は付け替えて notes で知らせる。' +
+      '**別ファイル・URLを指す $ref は読みに行かない**（その部分は unknown にして OA_EXTERNAL_REF で指摘）。1ファイルにまとめた仕様書を渡すこと。' +
+      'YAML/JSON の解析は自前（json_to_yaml と同じパーサ。ただし「- 」で始まる折り返し行も description の続きとして読む）。' +
+      '構文の誤りは ok:false と error（code・行・桁・前後の行の抜粋）で返す。' +
+      'spec か path のどちらか一方を渡す（20MBまで）。outputDir を渡すと <タイトル>.md と <タイトル>.ts を書き出す（本文は返さない）。' +
+      '完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      spec: z.string().optional().describe('仕様書の本文（YAML か JSON。path と排他）'),
+      path: z.string().optional().describe('仕様書ファイルの絶対パス（UTF-8 として読む。spec と排他）'),
+      lang: z.enum(['ja', 'en']).optional().describe("ドキュメント・指摘・エラーの言語（既定 'ja'）"),
+      examples: z.boolean().optional().describe('例が書かれていないレスポンスにスキーマから例を作る（既定 true）'),
+      operations: z.boolean().optional().describe('エンドポイントごとの引数・リクエスト・レスポンスの型も出す（既定 true）'),
+      output: z.enum(['both', 'markdown', 'typescript']).optional().describe("返す（書き出す）もの（既定 'both'）"),
+      outputDir: z.string().optional().describe('書き出し先ディレクトリの絶対パス（指定すると markdown / typescript は返さない）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('openapi_doc_generate');
+    return asText(await openApiDocGenerateTool(opts));
+  },
+);
+
+registerTool(
+  'faq_jsonld_generate',
+  {
+    title: 'FAQ構造化データ（JSON-LD）＆Markdown生成',
+    description:
+      '質問と回答のペアから、schema.org の FAQPage 形式の JSON-LD・同じ内容の Markdown・貼り付け用の HTML（details / summary）を同時に作る' +
+      '（tools.first-ch.com/faq-jsonld/ と同一ロジック）。' +
+      '**jsonld_generate（type=faqpage）との違い**: あちらは質問と回答を文字列のまま入れるだけ。こちらは回答を' +
+      '「空行で段落・改行は <br>・[文字](URL) と裸の https://… はリンク・行頭の - ・ と 1. は箇条書き」として読み、' +
+      'JSON-LD の acceptedAnswer.text を HTML（1行だけなら <p> で包まない）か answer_format="text" のプレーンテキストで書き、' +
+      'Markdown（見出し＋本文・記号はエスケープ）と details/summary の HTML も返す。' +
+      'bulk に「Q: / Q1. / Ｑ． / 質問：」「A: / 回答：/ 答え：」で始まる行や「## 見出し」で書いた文章をまとめて渡すと、質問と回答に分けて items の後ろへ足す。' +
+      'リンクは http(s)・mailto・tel・/・# だけをリンクにし、javascript: などは文字のまま残して UNSAFE_LINK で指摘する。' +
+      '相対URL（RELATIVE_LINK）・同じ質問の重複（DUPLICATE・全角半角と空白を無視）・片方だけ空の行（SKIPPED・出力しない）も warnings で返す。' +
+      '<script> の中で途切れないよう </script と <!-- と U+2028/2029 をエスケープする。日本語は \\u エスケープしない。' +
+      '質問は200件・質問500字・回答5000字まで。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      items: z
+        .array(z.object({ q: z.string().describe('質問（改行は空白に畳む）'), a: z.string().describe('回答（空行で段落・- / 1. で箇条書き・[文字](URL) でリンク）') }))
+        .optional()
+        .describe('質問と回答の配列（bulk と併用可・合計200件まで）'),
+      bulk: z.string().optional().describe('「Q: …」「A: …」や「## 質問」形式でまとめて書いた文章。解析して items の後ろへ足す'),
+      title: z.string().optional().describe('FAQ 全体の見出し（Markdown・HTML の先頭に入る。JSON-LD には入らない）'),
+      level: z.union([z.literal(2), z.literal(3)]).optional().describe('質問の見出しの段（既定 3 = ###。title は1段上）'),
+      answer_format: z.enum(['html', 'text']).optional().describe("JSON-LD の回答の書き方（既定 'html'。'text' はリンクを「文字（URL）」、箇条書きを記号付きの行にする）"),
+      wrap_script: z.boolean().optional().describe('JSON-LD を <script type="application/ld+json"> で包む（既定 true）'),
+      exclusive: z.boolean().optional().describe('details に name="faq" を付け、1つ開くとほかが閉じるようにする（既定 false）'),
+      lang: z.enum(['ja', 'en']).optional().describe("warnings の言語と、answer_format=text のときの書き方（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('faq_jsonld_generate');
+    return asText(await faqJsonldTool(opts));
+  },
+);
+
+registerTool(
+  'lines_process',
+  {
+    title: 'テキスト行操作（重複削除・並べ替え・行番号）',
+    description:
+      '1行1項目のテキストを整える（tools.first-ch.com/lines/ と同一ロジック）。' +
+      'キーワード・URL・メールアドレス・商品名の一覧の重複削除や並べ替え、箇条書き化といった定型処理に使う。' +
+      '**適用順は固定**: trim（前後の半角/全角空白・タブ・NBSPを削る） → removeBlank（空行と空白だけの行を削る） → ' +
+      'dedupe（dedupeMode: first＝最初の1行を残す / unique＝重複した行は1行も残さない / dupes＝重複した行だけを1行ずつ。ignoreCase で大文字小文字を区別しない） → ' +
+      'sort（asc / desc / reverse / shuffle。asc・desc は numeric〔既定 true〕で item2 < item10・-3 < 1.25 < 10 と数を数として比べ、数値の行を文字の行より前に置く。照合は日本語の Intl.Collator） → ' +
+      'prefix / suffix → number（start・sep: dot / paren / colon / bracket / tab / space・pad でゼロ埋め。接頭辞の外側に付く）。' +
+      'preset（uniqsort＝トリム＋空行除去＋重複削除＋昇順 / clean / numbered / mdlist＝"- " の箇条書き / shuffle）は Web版のボタンと同じ設定から始め、個別の引数で上書きできる。' +
+      'shuffle は seed（0〜4294967295）を渡すと同じ並びを再現でき、渡さなければ暗号学的乱数で偏りなく混ぜる。' +
+      '改行コードは入力の最初のものに揃え、末尾の改行も保つ。どの行が何回出たか（duplicates）と、前後の空白・大文字小文字・全角半角だけが違う「重複しかけ」の組を notes で返す。' +
+      'text か path のどちらか一方を渡す。outputPath を渡すとそのパスへ書き出す（本文は返さない）。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      text: z.string().optional().describe('対象のテキスト（1行1項目。path と排他）'),
+      path: z.string().optional().describe('対象ファイルの絶対パス（UTF-8として読む。text と排他）'),
+      outputPath: z.string().optional().describe('結果を書き出す絶対パス（指定すると本文は返さない）'),
+      preset: z.enum(['uniqsort', 'clean', 'numbered', 'mdlist', 'shuffle']).optional().describe('Web版のプリセットと同じ設定から始める（個別の引数で上書き）'),
+      trim: z.boolean().optional().describe('各行の前後の空白を削る（既定 false）'),
+      removeBlank: z.boolean().optional().describe('空行（空白だけの行を含む）を削る（既定 false）'),
+      dedupe: z.boolean().optional().describe('重複行を削る（既定 false。dedupeMode を渡すと true）'),
+      dedupeMode: z.enum(['first', 'unique', 'dupes']).optional().describe("重複の扱い（既定 'first'）"),
+      ignoreCase: z.boolean().optional().describe('重複の判定で大文字・小文字を区別しない（既定 false）'),
+      sort: z.enum(['none', 'asc', 'desc', 'reverse', 'shuffle']).optional().describe("並べ替え（既定 'none'）"),
+      numeric: z.boolean().optional().describe('asc/desc で数値を数として比べる（既定 true）'),
+      seed: z.number().int().optional().describe('shuffle のシード（0〜4294967295。同じシードなら同じ並び）'),
+      prefix: z.string().optional().describe('各行の先頭に付ける文字列'),
+      suffix: z.string().optional().describe('各行の末尾に付ける文字列'),
+      number: z.boolean().optional().describe('行番号を付ける（既定 false）'),
+      start: z.number().int().optional().describe('最初の番号（既定 1）'),
+      sep: z.enum(['dot', 'paren', 'colon', 'bracket', 'tab', 'space']).optional().describe("番号の後ろ（既定 'dot'＝'1. '。paren='1) '・colon='1: '・bracket='(1) '）"),
+      pad: z.boolean().optional().describe('番号の桁をゼロで揃える（既定 false）'),
+      lang: z.enum(['ja', 'en']).optional().describe("指摘事項の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('lines_process');
+    return asText(await linesProcessTool(opts));
+  },
+);
+
+const DPI_NUM = z.union([z.number(), z.string()]);
+
+registerTool(
+  'dpi_calc',
+  {
+    title: '印刷サイズ・DPI計算（必要ピクセル数・実効dpi・早見表）',
+    description:
+      '印刷物の仕上がりサイズ（mm）と解像度（dpi）から入稿に必要なピクセル数を求め、逆に手持ちの画像のピクセル数から印刷できる大きさと実効dpiを求める' +
+      '（tools.first-ch.com/dpi/ と同一ロジック）。チラシ・名刺・ポスターの入稿データ作成、支給画像が印刷に足りるかの判定に使う。' +
+      '`mode="size"`（既定）は paper（A0〜A6・B1〜B6〔JIS〕・MEISHI〔名刺91×55〕・HAGAKI・PHOTO_L・LETTER など28種。既定 A4）か widthMm/heightMm（自由なサイズ）と ' +
+      'dpi（既定350＝日本の商業印刷の標準）・bleedMm（塗り足し・片側。既定3）から、仕上がりと塗り足し込みのピクセル数（**端数は切り上げ**）・インチ・画素数・' +
+      '非圧縮のデータ量（RGB/CMYK）・入稿メモ（memo）と指摘（dpiの過不足・塗り足しなし・安全な範囲3mm・PSDの30,000px上限超え・CMYK入稿）を返す。' +
+      '名刺・往復はがき・封筒・チケットは既定で横向き（orientation で変更可）。' +
+      '`mode="reverse"`（width/height を渡すと既定）は画像のピクセル数から、その dpi での印刷サイズ・350dpiでの上限・paper（既定 A4）に使ったときの実効dpi' +
+      '（**用紙の縦横は有利な向きを選ぶ**）と判定（350以上=十分・300以上=実用・200以上=用途しだい・未満=不足）・350dpiに必要なピクセル数・主要12用紙での実効dpi一覧を返す。' +
+      '`mode="table"` は主要12用紙（papers で指定可）の早見表を text / md（Markdownの表）/ csv で返す。' +
+      '`mode="units"`（value を渡すと既定）は mm・cm・inch・px・pt（1/72インチ）・Q（級=0.25mm）を相互換算する（px は dpi で換算）。' +
+      '`mode="papers"` は用紙の一覧。数値は "210mm"・"4,000" のような文字列でも受ける。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      mode: z.enum(['size', 'reverse', 'table', 'units', 'papers']).optional().describe('処理の種類（省略時は width/height があれば reverse、value があれば units、それ以外は size）'),
+      paper: z.string().optional().describe("用紙のキー（A4 / B5 / MEISHI / HAGAKI / PHOTO_L / LETTER など。mode=papers で一覧。既定 'A4'。自由なサイズは widthMm/heightMm）"),
+      orientation: z.enum(['portrait', 'landscape']).optional().describe('用紙の向き（mode=size。省略時は用紙の既定＝名刺・封筒などは横）'),
+      widthMm: DPI_NUM.optional().describe('仕上がりの幅（mm・自由なサイズ。heightMm と組で。10000まで）'),
+      heightMm: DPI_NUM.optional().describe('仕上がりの高さ（mm）'),
+      dpi: DPI_NUM.optional().describe('解像度（1〜4800・既定 350）'),
+      bleedMm: DPI_NUM.optional().describe('塗り足し（片側・mm。0〜100・既定 3）'),
+      width: DPI_NUM.optional().describe('mode=reverse: 手持ちの画像の幅（px・500000まで）'),
+      height: DPI_NUM.optional().describe('mode=reverse: 手持ちの画像の高さ（px）'),
+      format: z.enum(['text', 'md', 'csv']).optional().describe("mode=table の書き出し形式（既定 'text'）"),
+      papers: z.array(z.string()).optional().describe('mode=table に載せる用紙のキー（省略時は主要12用紙）'),
+      value: DPI_NUM.optional().describe('mode=units で換算する値'),
+      from: z.enum(['mm', 'cm', 'inch', 'px', 'pt', 'q']).optional().describe("mode=units の value の単位（既定 'mm'）"),
+      lang: z.enum(['ja', 'en']).optional().describe("用紙名・指摘・入稿メモの言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('dpi_calc');
+    return asText(await dpiCalcTool(opts));
+  },
+);
+
+registerTool(
+  'serp_check',
+  {
+    title: 'SERPメタタグ文字数・ピクセル幅チェック',
+    description:
+      'title / meta description / URL が Google 検索結果でどこまで表示されるかを、文字数ではなく**表示幅（ピクセル）**で判定する' +
+      '（tools.first-ch.com/serp/ の判定部分と同一ロジック。プレビューの描画は除く）。' +
+      '基準はパソコン＝結果の幅600px・タイトル20pxで1行・説明文14pxで2行、スマートフォン＝380px・タイトル2行・説明文3行（device="both" で両方）。' +
+      '和文は文字単位・欧文は単語単位で折り返し、行頭禁則（、。」など）はぶら下げ・行末禁則（「（など）は次の行へ送る。' +
+      '行数を超えたら最終行を「…」が入る幅まで削り、表示される行（lines）・切り詰められる部分（cut）・幅（width_px / limit_px）・文字数（書記素単位）・状態（ok / cut / short〔上限の半分未満〕/ empty）を返す。' +
+      '指摘（checks）はタイトル・説明文の未入力（fail）、切り詰め・短すぎ・サイト名の区切り（| ｜ - : など）が無い、URL が https でない・パスが4階層以上・%エンコードを含む（warn）。' +
+      'パンくず表示（host › path）と貼り付け用の <title> / <meta name="description"> / <link rel="canonical"> も返す。' +
+      '**ピクセル幅は近似**: Web版はブラウザの canvas で実測するが、ここでは Arial の字幅表と和文＝1em で測る（カーニングなし）。' +
+      'ブラウザより数px広く出ることがあり、切り詰めの判定は早め（安全側）に寄る。境目の1〜2文字は目安として扱う。' +
+      'items で500件までまとめて判定できる。URL を取りに行かない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      title: z.string().optional().describe('<title> の文字列（空白は1つに畳む）'),
+      description: z.string().optional().describe('meta description の文字列'),
+      url: z.string().optional().describe('ページの URL（パンくず表示と https・階層の判定に使う。スキーム省略時は https:// とみなす）'),
+      items: z
+        .array(z.object({ title: z.string().optional(), description: z.string().optional(), url: z.string().optional() }))
+        .optional()
+        .describe('まとめて判定する（500件まで。title/description/url と排他）'),
+      device: z.enum(['desktop', 'mobile', 'both']).optional().describe("基準（既定 'desktop'。'both' はパソコンとスマートフォンの両方）"),
+      lang: z.enum(['ja', 'en']).optional().describe("指摘事項の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('serp_check');
+    return asText(await serpCheckTool(opts));
+  },
+);
+
+registerTool(
+  'css_layout_generate',
+  {
+    title: 'Flexbox / CSS Grid のCSS生成',
+    description:
+      'Flexbox / CSS Grid のコンテナと子要素の指定から、コピーして使える CSS と HTML を組み立てる（tools.first-ch.com/css-layout/ と同一ロジック）。' +
+      'レイアウトの実装・コーディング指示の下書き・プロパティの効き方の確認に使う。**既定値と同じ宣言は書かない**（flex-wrap: nowrap・justify-content: flex-start など）、' +
+      '同じトラックが続けば repeat() に畳む、行と列の gap が同じなら1つにまとめる。' +
+      '`mode="flex"`（既定）は display / direction / wrap / justifyContent / alignItems / alignContent / gap と、items（子要素ごとの grow・shrink・basis・alignSelf・order）。' +
+      '`mode="grid"`（columns / rows / areas / autoFit を渡すと既定）は columns・rows（トラックの配列。例: ["240px", "minmax(0, 1fr)"]）・autoFit（repeat(auto-fit, minmax(autoFitMin, 1fr))）・' +
+      'flow・justifyItems・alignItems・justifyContent・alignContent と、items（columnSpan・rowSpan）。' +
+      '**areas（grid-template-areas）は自前で検証する**: 行ごとのマス数が揃っているか・名前が長方形か（L字や分断だと CSS は値全体を捨てる）・名前に使えない字・列トラック数との食い違い。' +
+      '行は改行か " / " で区切る（"header header / side main"）。正しければ名前ごとの grid-area の規則と HTML を出す。' +
+      'notes は効かない組み合わせ（flex-grow があると justify-content が効かない・nowrap で align-content は無意味・1fr トラックで justify-content に余りが無い）と' +
+      '落とし穴（min-width: auto であふれる・1fr の最小値は auto・reverse や dense で読む順がずれる・flexbox の gap は Safari 14.1 以降）。hints は選んだ値の一言解説。' +
+      'preset で定番（center-row / header / card-row / sidebar / holy-grail / auto-fit / mosaic / stack-bottom）から始められ、mode="presets" で全プリセットの CSS を返す。' +
+      '値の範囲は Web 版のフォームと同じ（gap 0〜80px・子要素 flex 8個 / grid 12個まで・grow/shrink 0〜5・order -2〜2・span 1〜6）。' +
+      'プレビューの描画と折り返し行数の実測はブラウザ専用のため返さない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      mode: z.enum(['flex', 'grid', 'presets']).optional().describe('作るレイアウト（省略時は preset の種類、columns/rows/areas/autoFit があれば grid、それ以外は flex）'),
+      preset: z
+        .enum(['center-row', 'header', 'card-row', 'sidebar', 'holy-grail', 'auto-fit', 'mosaic', 'stack-bottom'])
+        .optional()
+        .describe('定番の組み合わせから始める（ほかの指定はその上に重ねる）'),
+      display: z.enum(['flex', 'inline-flex']).optional().describe("flex: display（既定 'flex'）"),
+      direction: z.enum(['row', 'row-reverse', 'column', 'column-reverse']).optional().describe("flex: flex-direction（既定 'row'）"),
+      wrap: z.enum(['nowrap', 'wrap', 'wrap-reverse']).optional().describe("flex: flex-wrap（既定 'wrap'）"),
+      justifyContent: z.string().optional().describe("justify-content（flex 既定 'flex-start' / grid 既定 'start'）"),
+      alignItems: z.string().optional().describe("align-items（既定 'stretch'。flex は flex-start/flex-end/center/baseline、grid は start/end/center も）"),
+      alignContent: z.string().optional().describe("align-content（flex 既定 'stretch' / grid 既定 'start'）"),
+      columns: z.array(z.string()).optional().describe('grid: grid-template-columns のトラック（1〜12本・既定 ["1fr","1fr","1fr"]）'),
+      rows: z.array(z.string()).optional().describe('grid: grid-template-rows のトラック（既定 ["auto"]＝書かない）'),
+      autoFit: z.boolean().optional().describe('grid: 列を repeat(auto-fit, minmax(autoFitMin, 1fr)) にする（既定 false）'),
+      autoFitMin: z.number().int().optional().describe('grid: auto-fit の最小幅 px（80〜400・既定 200）'),
+      flow: z.enum(['row', 'column', 'row dense', 'column dense']).optional().describe("grid: grid-auto-flow（既定 'row'）"),
+      justifyItems: z.enum(['stretch', 'start', 'end', 'center']).optional().describe("grid: justify-items（既定 'stretch'）"),
+      areas: z.string().optional().describe('grid: grid-template-areas（行を改行か " / " で区切る。"." は空きマス）'),
+      gap: z.number().int().optional().describe('行と列の gap px（0〜80・既定 12）'),
+      rowGap: z.number().int().optional().describe('行方向の gap px（gap より優先）'),
+      colGap: z.number().int().optional().describe('列方向の gap px（gap より優先）'),
+      count: z.number().int().optional().describe('子要素の数（flex 1〜8・既定 4 / grid 1〜12・既定 6。areas が正しければ名前の数になる）'),
+      items: z
+        .array(
+          z
+            .object({
+              grow: z.number().int().optional().describe('flex-grow（0〜5）'),
+              shrink: z.number().int().optional().describe('flex-shrink（0〜5）'),
+              basis: z.string().optional().describe('flex-basis（auto / 0 / 50% / 240px / min-content など）'),
+              alignSelf: z.enum(['auto', 'stretch', 'flex-start', 'flex-end', 'center', 'baseline']).optional().describe('align-self'),
+              order: z.number().int().optional().describe('order（-2〜2）'),
+              columnSpan: z.number().int().optional().describe('grid: grid-column: span N（1〜6）'),
+              rowSpan: z.number().int().optional().describe('grid: grid-row: span N（1〜6）'),
+            })
+            .nullable(),
+        )
+        .optional()
+        .describe('子要素ごとの指定（先頭から順に。null は既定のまま）'),
+      lang: z.enum(['ja', 'en']).optional().describe("notes・hints の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('css_layout_generate');
+    return asText(await cssLayoutGenerateTool(opts));
   },
 );
 
