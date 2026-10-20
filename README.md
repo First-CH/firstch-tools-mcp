@@ -87,6 +87,8 @@ This server is also registered in the [MCP Registry](https://registry.modelconte
 
 ### App tools (`app_*`, sent to apps.first-ch.com)
 
+**Off by default.** These tools send your input to apps.first-ch.com, so they are only registered when you opt in with the environment variable `FIRSTCH_ENABLE_APPS=1` (for example `claude mcp add firstch-tools -e FIRSTCH_ENABLE_APPS=1 -- npx -y @first-ch/tools-mcp`). Without it, every tool runs on your machine and nothing is sent anywhere.
+
 Each `app_*` tool calls one app's public JSON API (`POST https://apps.first-ch.com/<slug>/api/<action>`, no auth; the list is in [llms.txt](https://apps.first-ch.com/llms.txt)) and returns its JSON response as is. **The input is sent to apps.first-ch.com and processed there; the apps store neither the input nor the result.** Apps that check a site make First CH's server request that site, so the site sees a request from apps.first-ch.com, not from you. Every `app_*` tool also takes `lang?` (`ja` default / `en`) for the language of verdicts and error messages. Calls time out after 30 s (60 s for the heavier apps and the AI apps). API errors (invalid input, unreachable site, rate limit) come back as tool errors carrying the app's `error` code and `message`.
 
 | Tool | App and what it does | Main input |
@@ -261,6 +263,8 @@ claude mcp add firstch-tools -- npx -y @first-ch/tools-mcp
 | `slug_generate` | 日本語の記事タイトルから WordPress 等の URL スラッグを作る。tools.first-ch.com/slug/ と同一ロジック。かなをヘボン式ローマ字にし（`し→shi`・`ち→chi`・`つ→tsu`・`ふ→fu`・`じ→ji`・`しゃ→sha`・促音は子音を重ねて `kitte`／ch の前は `matcha`・`ん` は常に `n`・`ファ→fa`・`ティ→ti`・`ヴァ→va`）、記号を除いてハイフン（`separator="snake"` ならアンダースコア）でつなぎ小文字にする。結果は `a-z`・`0-9`・区切り文字だけ。**漢字の読みは推定しない**: `reading` にかなで読みを渡すと `title` の代わりにそこから作る（`reading` の空白が区切りになる: `とうきょう で たべた ラーメン 10せん` → `tokyo-de-tabeta-ramen-10-sen`）。読みの無い漢字は飛ばして `skipped` と `KANJI` の指摘で返す。区切りは記号・漢字・かな⇄英数字の切り替わりと、`splitKatakana`（既定 true）ならひらがな⇄カタカナの切り替わり。`longVowel="omit"`（既定）は おう・おお・うう と ー を1字にし（`tokyo`・`ramen`。えい・いい は残す）、`"keep"` は `toukyou`・`raamen`。助詞の は・へ・を は字のとおり `ha`・`he`・`o`。`maxLength` は語の切れ目で切る。数字だけのスラッグ（日付アーカイブと衝突し WordPress が `-2` を付けうる）と60文字超を指摘する。`variants` に区切り×長音の4通り、`items` で1000件まで一括・同じスラッグの衝突を `DUPLICATE` で指摘 | `title?`、`reading?`、`items?`（文字列か `{title, reading}`）、`separator?`（既定 `kebab` / `snake`）、`longVowel?`（既定 `omit` / `keep`）、`maxLength?`（0〜200・0＝無制限）、`splitKatakana?`、`lang?`（既定 `ja` / `en`） |
 
 #### apps のツール（`app_*`・apps.first-ch.com へ送信）
+
+**既定では無効です。** 入力を apps.first-ch.com へ送るため、環境変数 `FIRSTCH_ENABLE_APPS=1` で明示的に有効にしたときだけ登録されます（例: `claude mcp add firstch-tools -e FIRSTCH_ENABLE_APPS=1 -- npx -y @first-ch/tools-mcp`）。指定しなければ、すべてのツールが端末内で動き、どこにも送信しません。
 
 各 `app_*` ツールは、アプリ1本の公開 JSON API（`POST https://apps.first-ch.com/<slug>/api/<action>`・認証なし。一覧は [llms.txt](https://apps.first-ch.com/llms.txt)）を呼び、応答の JSON をそのまま返します。**入力は apps.first-ch.com へ送られてそこで処理され、入力も結果もサーバーには保存されません。** 対象サイトを取得するアプリは First CH のサーバーから相手のサイトへアクセスするので、相手側には apps.first-ch.com からのアクセスとして記録されます。全ての `app_*` ツールは `lang?`（既定 `ja`／`en`）で判定・エラー文の言語を選べます。待ち時間は30秒（重いアプリと AI のアプリは60秒）。入力の不備・相手サイトに届かない・回数制限などの API エラーは、アプリの `error` コードと `message` を含むツールのエラーとして返ります。
 

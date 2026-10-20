@@ -100,7 +100,10 @@ const logUsage = (tool) =>
 // ここではまとめて登録するだけにする。他のツールと違い入力を apps.first-ch.com へ送るので、
 // openWorldHint: true を付ける（端末のファイルは書き換えないので readOnlyHint: true のまま）。
 // ---------------------------------------------------------------------------
-for (const def of APP_TOOLS) {
+// 既定では登録しない（端末内で完結するツールだけを出す）。入力を外へ送るツールは、利用者が
+// FIRSTCH_ENABLE_APPS=1 で明示的に有効にしたときだけ出す（「既定では外部へ通信しない」を崩さないため・2026-10-21）
+const APPS_ENABLED = /^(1|true|yes|on)$/i.test(process.env.FIRSTCH_ENABLE_APPS ?? '');
+for (const def of APPS_ENABLED ? APP_TOOLS : []) {
   OPEN_WORLD.add(def.name);
   registerTool(
     def.name,

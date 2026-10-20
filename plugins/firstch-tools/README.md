@@ -68,3 +68,5 @@ MIT. The bundled WebP codec carries its own licenses (Apache-2.0 and BSD-3-Claus
 ## Publisher
 
 First CH LLC — [first-ch.com](https://first-ch.com)
+
+> `app_*` tools are off by default and only appear when `FIRSTCH_ENABLE_APPS=1` is set; without it, nothing leaves your machine.

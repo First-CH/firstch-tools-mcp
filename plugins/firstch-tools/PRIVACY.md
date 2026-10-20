@@ -39,3 +39,5 @@ The local server keeps nothing. Result files and the optional usage log stay on 
 ## Contact
 
 [GitHub Issues](https://github.com/First-CH/firstch-tools-mcp/issues), or the contact form at [first-ch.com](https://first-ch.com/#contact). First CH LLC's general privacy policy for its website and enquiries: [first-ch.com/privacy/](https://first-ch.com/privacy/).
+
+> `app_*` tools are off by default and only appear when `FIRSTCH_ENABLE_APPS=1` is set; without it, nothing leaves your machine.

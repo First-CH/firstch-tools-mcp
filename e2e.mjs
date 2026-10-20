@@ -39,7 +39,7 @@ const fakeAppsUrl = `http://127.0.0.1:${fakeApps.address().port}`;
 
 const child = spawn(process.execPath, [join(here, 'server.mjs')], {
   stdio: ['pipe', 'pipe', 'inherit'],
-  env: { ...process.env, FIRSTCH_APPS_BASE_URL: fakeAppsUrl },
+  env: { ...process.env, FIRSTCH_APPS_BASE_URL: fakeAppsUrl, FIRSTCH_ENABLE_APPS: '1' },
 });
 
 const pending = new Map();
@@ -770,6 +770,27 @@ try {
   assert.ok(appErr.result?.isError, `app_headers should surface the API error: ${JSON.stringify(appErr)}`);
   assert.match(JSON.stringify(appErr.result), /invalid_url/);
   assert.ok(appsRequests.some((r) => r.url === '/en/headers/api/inspect'), 'lang=en should call the /en/ API');
+
+  // 既定（FIRSTCH_ENABLE_APPS なし）では app_* を出さない＝入力を外へ送るツールは明示的に有効にしたときだけ
+  const plain = spawn(process.execPath, [join(here, 'server.mjs')], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, FIRSTCH_ENABLE_APPS: '' } });
+  const plainNames = await new Promise((resolve, reject) => {
+    let out = '';
+    const timer = setTimeout(() => reject(new Error('timeout waiting for default tools/list')), 15000);
+    plain.stdout.on('data', (chunk) => {
+      out += chunk.toString('utf8');
+      for (const line of out.split('\n')) {
+        if (!line.trim()) continue;
+        let msg; try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.id === 2) { clearTimeout(timer); resolve((msg.result?.tools || []).map((t) => t.name)); }
+      }
+    });
+    plain.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'e2e-default', version: '0.0.0' } } }) + '\n');
+    plain.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+    plain.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) + '\n');
+  });
+  plain.kill();
+  assert.ok(plainNames.length > 30, `default tools/list returned too few tools: ${plainNames.length}`);
+  assert.equal(plainNames.filter((n) => n.startsWith('app_')).length, 0, 'app_* tools must be opt-in (FIRSTCH_ENABLE_APPS=1)');
 
   console.log('e2e ok:', names.join(', '));
   fakeApps.close();
