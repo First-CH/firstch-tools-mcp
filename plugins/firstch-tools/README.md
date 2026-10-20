@@ -6,11 +6,11 @@ This plugin adds the **First CH Tools** MCP server to Claude. It exposes the sam
 
 The server provides tools for, among others:
 
-- **Web and accessibility checks** — WCAG 2.1 contrast ratio, px ⇄ rem/em conversion, HEX/RGB/HSL/OKLCH colour conversion, aspect-ratio sizing
-- **SEO and AI-crawler files** — schema.org JSON-LD, `llms.txt`, `robots.txt` with AI-crawler presets, URL parameter editing, URL slugs from Japanese titles
+- **Web and accessibility checks** — WCAG 2.1 contrast ratio, px ⇄ rem/em conversion, HEX/RGB/HSL/OKLCH colour conversion, aspect-ratio sizing, Flexbox / CSS Grid CSS generation
+- **SEO and AI-crawler files** — schema.org JSON-LD, `llms.txt`, `robots.txt` with AI-crawler presets, URL parameter editing, URL slugs from Japanese titles, FAQ structured data (FAQPage JSON-LD + Markdown), title/meta-description pixel-width checks for search results
 - **Japanese text** — character and X (Twitter) post-weight counting, full-width ⇄ half-width conversion, Japanese era ⇄ Western date conversion, encoding and line-ending detection/conversion (UTF-8 / Shift_JIS)
-- **Images and documents** — PNG/JPEG → WebP conversion, Marp Markdown → slides (HTML, optional PDF), QR codes, HTML → Markdown
-- **Developer utilities** — JSON ⇄ YAML, CSV/TSV ⇄ JSON, Markdown tables, SQL formatting, text/code diffing, cron explanation, Base64/data URIs, HTML escaping, hashing, JWT decoding, User-Agent parsing, UUID/ULID, Unix time, IP/CIDR calculation, business-day date calculation, case conversion, test data generation
+- **Images and documents** — PNG/JPEG → WebP conversion, Marp Markdown → slides (HTML, optional PDF), QR codes, HTML → Markdown, print size ⇄ pixels / DPI, OpenAPI → Markdown reference and TypeScript types
+- **Developer utilities** — JSON ⇄ YAML, CSV/TSV ⇄ JSON, Markdown tables, SQL formatting, text/code diffing, cron explanation, Base64/data URIs, HTML escaping, hashing, JWT decoding, User-Agent parsing, UUID/ULID, Unix time, IP/CIDR calculation, business-day date calculation, case conversion, line operations (dedupe, sort, number), htpasswd generation for Basic auth, test data generation
 
 The full, current tool list with inputs is in the [repository README](https://github.com/First-CH/firstch-tools-mcp#tools).
 

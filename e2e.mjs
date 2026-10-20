@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 35 registered tools, and `tools/call` actually executes handlers
+// returns all 42 registered tools, and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
-// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert / slug_generate) and returns the expected values — this catches
+// color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert / slug_generate / htpasswd_generate / openapi_doc_generate /
+// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -66,22 +67,29 @@ try {
     'contrast_check',
     'count_chars',
     'cron_explain',
+    'css_layout_generate',
     'csv_convert',
     'date_calc',
     'diff_check',
+    'dpi_calc',
     'encoding_convert',
+    'faq_jsonld_generate',
     'hash_generate',
     'html_escape',
     'html_to_markdown',
+    'htpasswd_generate',
     'json_to_yaml',
     'jsonld_generate',
     'jwt_decode',
+    'lines_process',
     'llmstxt_generate',
     'markdown_table',
     'marp_render',
+    'openapi_doc_generate',
     'px_rem_convert',
     'qr_generate',
     'robotstxt_generate',
+    'serp_check',
     'slug_generate',
     'sql_format',
     'testdata_generate',
@@ -101,7 +109,7 @@ try {
   const WRITERS = new Set([
     'webp_convert', 'marp_render', 'testdata_generate', 'base64_encode', 'html_escape', 'json_to_yaml', 'yaml_to_json',
     'px_rem_convert', 'markdown_table', 'sql_format', 'qr_generate', 'robotstxt_generate', 'case_convert', 'csv_convert',
-    'zenkaku_convert', 'html_to_markdown',
+    'zenkaku_convert', 'html_to_markdown', 'htpasswd_generate', 'openapi_doc_generate', 'lines_process',
   ]);
   for (const t of listRes.result.tools) {
     const a = t.annotations || {};
@@ -728,6 +736,115 @@ try {
 
   const sgErr = await request('tools/call', { name: 'slug_generate', arguments: { title: 'a', maxLength: 500 } }, 104);
   assert.ok(sgErr.result?.isError, `slug_generate should reject maxLength 500: ${JSON.stringify(sgErr)}`);
+
+  // expected（ツール一覧）へ 'htpasswd_generate' を追加（アルファベット順で 'html_escape' の前）
+  // WRITERS へ 'htpasswd_generate' を追加（outputPath を持つため）
+
+  // htpasswd_generate: bcrypt の1行・パスワードの自動生成とスニペット・照合・壊れた引数
+  const htOne = await callTool('htpasswd_generate', { user: 'client', password: 'correct-horse-battery', cost: 4 }, 110);
+  assert.match(htOne.entries?.[0]?.line ?? '', /^client:\$2y\$04\$[./A-Za-z0-9]{53}$/, `htpasswd_generate line mismatch: ${JSON.stringify(htOne)}`);
+
+  const htBulk = await callTool('htpasswd_generate', { bulk: 'a:\nb:\n', algo: 'apr1', server: 'nginx', ips: '1.2.3.4' }, 111);
+  assert.equal(htBulk.generated?.length, 2, `htpasswd_generate should generate passwords: ${JSON.stringify(htBulk.generated)}`);
+  assert.match(htBulk.snippet?.text ?? '', /allow 1\.2\.3\.4;/, `htpasswd_generate snippet mismatch: ${JSON.stringify(htBulk.snippet)}`);
+
+  const htVerify = await callTool('htpasswd_generate', { hash: 'myName:$apr1$r31.....$HqJZimcKQFAMYayBlzkrA/', password: 'myPassword' }, 112);
+  assert.equal(htVerify.match, true, `htpasswd_generate verify mismatch: ${JSON.stringify(htVerify)}`);
+
+  const htErr = await request('tools/call', { name: 'htpasswd_generate', arguments: { user: 'a', cost: 20 } }, 113);
+  assert.ok(htErr.result?.isError, `htpasswd_generate should reject cost 20: ${JSON.stringify(htErr)}`);
+
+  // e2e.mjs: expected 一覧に 'openapi_doc_generate' を（アルファベット順で）足し、WRITERS にも足す。
+
+  // openapi_doc_generate: 型定義とドキュメント・構文エラー・壊れた引数
+  const oaSpec = "openapi: 3.0.3\ninfo: {title: Pet Shop, version: 2.1.0}\npaths:\n  /pets/{petId}:\n    get:\n      operationId: get-pet\n      parameters:\n        - {name: petId, in: path, required: true, schema: {type: integer}}\n      responses:\n        '200': {description: OK, content: {application/json: {schema: {$ref: '#/components/schemas/Pet'}}}}\ncomponents:\n  schemas:\n    Pet: {type: object, required: [id], properties: {id: {type: integer}, name: {type: string}}}\n";
+  const oaOne = await callTool('openapi_doc_generate', { spec: oaSpec }, 130);
+  assert.equal(oaOne.endpoints, 1, `openapi_doc_generate endpoints mismatch: ${JSON.stringify(oaOne.endpoints)}`);
+  assert.match(oaOne.typescript || '', /export interface Pet \{/, `openapi_doc_generate typescript mismatch: ${oaOne.typescript}`);
+  assert.match(oaOne.typescript || '', /export type GetPetResponse = Pet;/, `openapi_doc_generate operation types missing: ${oaOne.typescript}`);
+  assert.match(oaOne.markdown || '', /^# Pet Shop API リファレンス$/m, `openapi_doc_generate markdown mismatch: ${oaOne.markdown}`);
+
+  const oaBad = await callTool('openapi_doc_generate', { spec: 'foo: 1\n', lang: 'en' }, 131);
+  assert.equal(oaBad.error?.code, 'OA_NOT_SPEC', `openapi_doc_generate should reject a non-spec: ${JSON.stringify(oaBad)}`);
+
+  const oaErr = await request('tools/call', { name: 'openapi_doc_generate', arguments: { spec: 'a', path: '/tmp/a.yaml' } }, 132);
+  assert.ok(oaErr.result?.isError, `openapi_doc_generate should reject spec+path: ${JSON.stringify(oaErr)}`);
+
+  // faq_jsonld_generate: 回答の Markdown→HTML・一括貼り付け・警告・壊れた引数
+  const fqOne = await callTool('faq_jsonld_generate', {
+    items: [{ q: '支払い方法は？', a: '次の方法に対応しています。\n- 銀行振込\n- クレジットカード' }],
+    bulk: 'Q: 送料は？\nA: 全国一律です。',
+  }, 140);
+  assert.equal(fqOne.count, 2, `faq_jsonld_generate count mismatch: ${JSON.stringify(fqOne.count)}`);
+  assert.equal(fqOne.data?.mainEntity?.[0]?.acceptedAnswer?.text, '<p>次の方法に対応しています。</p><ul><li>銀行振込</li><li>クレジットカード</li></ul>', `faq_jsonld_generate answer html mismatch: ${JSON.stringify(fqOne.data)}`);
+  assert.match(fqOne.markdown || '', /^### 送料は？$/m, `faq_jsonld_generate markdown mismatch: ${JSON.stringify(fqOne.markdown)}`);
+
+  const fqWarn = await callTool('faq_jsonld_generate', { items: [{ q: 'a', a: '[x](javascript:alert(1))' }, { q: 'A', a: 'b' }], lang: 'en' }, 141);
+  assert.deepEqual(fqWarn.warnings?.map((w) => w.code), ['DUPLICATE', 'UNSAFE_LINK'], `faq_jsonld_generate warnings mismatch: ${JSON.stringify(fqWarn.warnings)}`);
+
+  const fqErr = await request('tools/call', { name: 'faq_jsonld_generate', arguments: {} }, 142);
+  assert.ok(fqErr.result?.isError, `faq_jsonld_generate should reject missing items/bulk: ${JSON.stringify(fqErr)}`);
+
+  // expected（ツール一覧）へ 'lines_process' を追加（アルファベット順で 'jwt_decode' の後・'llmstxt_generate' の前）
+  // WRITERS へ 'lines_process' を追加（outputPath を持つため）
+
+  // lines_process: プリセット・シード付きシャッフル・壊れた引数
+  const lnSort = await callTool('lines_process', { text: 'banana\napple\n  cherry  \nitem10\nitem2\n\nApple\nbanana\n10\n-3\n1.5\n1.25\nitem1\napple\n', preset: 'uniqsort' }, 120);
+  assert.equal(lnSort.text, '-3\n1.25\n1.5\n10\napple\nApple\nbanana\ncherry\nitem1\nitem2\nitem10\n', `lines_process uniqsort mismatch: ${JSON.stringify(lnSort.text)}`);
+  assert.equal(lnSort.stats?.dup_removed, 2, `lines_process stats mismatch: ${JSON.stringify(lnSort.stats)}`);
+
+  const lnNum = await callTool('lines_process', { text: 'a\r\nb\r\n', number: true, sep: 'paren', lang: 'en' }, 121);
+  assert.equal(lnNum.text, '1) a\r\n2) b\r\n', `lines_process numbering mismatch: ${JSON.stringify(lnNum.text)}`);
+
+  const lnErr = await request('tools/call', { name: 'lines_process', arguments: { text: 'a', sort: 'random' } }, 122);
+  assert.ok(lnErr.result?.isError, `lines_process should reject sort=random: ${JSON.stringify(lnErr)}`);
+
+  // dpi_calc: 必要ピクセル数（既定 A4・350dpi・塗り足し3mm）・逆算と実効dpi・早見表・単位換算・壊れた引数
+  const dpSize = await callTool('dpi_calc', { paper: 'A4' }, 160);
+  assert.equal(dpSize.display?.full, '2,977 × 4,176 px', `dpi_calc size mismatch: ${JSON.stringify(dpSize.display)}`);
+  assert.equal(dpSize.trimWidth, 2894, `dpi_calc trim mismatch: ${JSON.stringify(dpSize.trimWidth)}`);
+
+  const dpRev = await callTool('dpi_calc', { width: 4000, height: 3000, paper: 'A4' }, 161);
+  assert.equal(dpRev.effective?.display, '335 dpi', `dpi_calc reverse mismatch: ${JSON.stringify(dpRev.effective)}`);
+  assert.equal(dpRev.effective?.grade, 'ok', `dpi_calc grade mismatch: ${JSON.stringify(dpRev.effective)}`);
+
+  const dpTable = await callTool('dpi_calc', { mode: 'table', format: 'csv', dpi: 300, bleedMm: 0, papers: ['A4'], lang: 'en' }, 162);
+  assert.equal(dpTable.text?.split('\n')[1], 'A4,210,297,2481,3508,2481,3508,300,0', `dpi_calc table mismatch: ${JSON.stringify(dpTable.text)}`);
+
+  const dpUnits = await callTool('dpi_calc', { value: '210mm' }, 163);
+  assert.equal(dpUnits.display?.px, '2893.7 px', `dpi_calc units mismatch: ${JSON.stringify(dpUnits.display)}`);
+
+  const dpErr = await request('tools/call', { name: 'dpi_calc', arguments: { dpi: 5000 } }, 164);
+  assert.ok(dpErr.result?.isError, `dpi_calc should reject 5000 dpi: ${JSON.stringify(dpErr)}`);
+
+  // serp_check: ピクセル幅での切り詰め・両デバイス・一括・壊れた引数
+  const spOne = await callTool('serp_check', { title: 'SERPプレビュー＆メタタグ文字数チェック｜title・descriptionのピクセル幅を実測 | First CH Tools', description: '検索結果に表示される説明文です。', url: 'https://example.com/serp/' }, 150);
+  assert.equal(spOne.title?.truncated, true, `serp_check should truncate the title: ${JSON.stringify(spOne.title)}`);
+  assert.equal(spOne.title?.cut, 'のピクセル幅を実測 | First CH Tools', `serp_check cut mismatch: ${JSON.stringify(spOne.title?.cut)}`);
+  assert.equal(spOne.url?.breadcrumb, 'example.com › serp', `serp_check breadcrumb mismatch: ${JSON.stringify(spOne.url)}`);
+
+  const spBoth = await callTool('serp_check', { items: [{ title: 'Page | Site', description: 'x'.repeat(100), url: 'https://a.com/' }], device: 'both' }, 151);
+  assert.equal(spBoth.results?.[0]?.mobile?.title?.max_lines, 2, `serp_check mobile mismatch: ${JSON.stringify(spBoth.results?.[0])}`);
+
+  const spErr = await request('tools/call', { name: 'serp_check', arguments: { title: 'a', device: 'tablet' } }, 152);
+  assert.ok(spErr.result?.isError, `serp_check should reject device tablet: ${JSON.stringify(spErr)}`);
+
+  // css_layout_generate: 既定の flex・grid のトラックと span・エリアの検証・プリセット・壊れた引数
+  const clFlex = await callTool('css_layout_generate', {}, 170);
+  assert.equal(clFlex.css, '.layout {\n  display: flex;\n  flex-direction: row;\n  flex-wrap: wrap;\n  gap: 12px;\n}', `css_layout_generate flex mismatch: ${JSON.stringify(clFlex.css)}`);
+
+  const clGrid = await callTool('css_layout_generate', { columns: ['1fr', '1fr', '1fr', '240px'], gap: 16, items: [{ columnSpan: 2 }] }, 171);
+  assert.match(clGrid.css || '', /grid-template-columns: repeat\(3, 1fr\) 240px;[\s\S]*grid-column: span 2;/, `css_layout_generate grid mismatch: ${JSON.stringify(clGrid.css)}`);
+
+  const clBad = await callTool('css_layout_generate', { areas: 'a a / b a' }, 172);
+  assert.ok(clBad.areas?.error, `css_layout_generate should flag a non-rectangular area: ${JSON.stringify(clBad.areas)}`);
+  assert.equal(clBad.notes?.[0]?.level, 'warn', `css_layout_generate area note mismatch: ${JSON.stringify(clBad.notes)}`);
+
+  const clPreset = await callTool('css_layout_generate', { preset: 'holy-grail' }, 173);
+  assert.deepEqual(clPreset.areas?.names, ['header', 'nav', 'main', 'aside', 'footer'], `css_layout_generate preset mismatch: ${JSON.stringify(clPreset.areas)}`);
+
+  const clErr = await request('tools/call', { name: 'css_layout_generate', arguments: { gap: 500 } }, 174);
+  assert.ok(clErr.result?.isError, `css_layout_generate should reject gap 500: ${JSON.stringify(clErr)}`);
 
   console.log('e2e ok:', names.join(', '));
   child.kill();
