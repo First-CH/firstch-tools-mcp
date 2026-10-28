@@ -291,6 +291,29 @@ const DEFS = [
     },
   },
   {
+    slug: 'lookalike-domain',
+    apiPath: '/lookalike-domain/api/check',
+    title: '偽ドメイン見分け（取引先と照合）',
+    summary:
+      '差出人のメールアドレス（またはドメイン）を、取引先のドメイン（最大50件）と照合し、ローマ字の表記ゆれ・TLDの入れ替え・1文字違い・見た目の似た文字（punycode を含む）などで似せた偽ドメインかを判定する。違う文字の位置（diff）と、差出人のドメインの登録日（RDAP）・MX も返す。trusted を省くと照合はせず、登録日と MX だけを返す。振込先の変更や請求書のメールの確認に。' +
+      '同じIPから10分に30回まで（超えると HTTP 429）。',
+    sends: '差出人のアドレスと、渡した取引先のドメイン一覧',
+    fetches: false,
+    inputSchema: {
+      sender: z
+        .string()
+        .min(1)
+        .max(320)
+        .describe('差出人のメールアドレスかドメイン（例: keiri@example.co.jp。「表示名 <addr>」の形でもよい）'),
+      trusted: z
+        .array(z.string().min(1).max(320))
+        .max(50)
+        .optional()
+        .describe('照合する取引先のドメイン（最大50件。例: ["example.co.jp"]）。省くと登録日と MX だけを返す'),
+      lang: LANG,
+    },
+  },
+  {
     slug: 'myip',
     apiPath: '/myip/api/info',
     title: 'IP・リクエスト情報の確認',

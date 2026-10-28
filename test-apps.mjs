@@ -64,6 +64,8 @@ const jsonRes = (obj, status = 200, headers = {}) =>
   assert.equal(APP_TOOLS.filter((d) => d.ai).length, 2);
   assert.match(byName.app_nap_check.description, /10分に10回/);
   assert.match(byName.app_redirect_map.description, /1分に60組/);
+  assert.match(byName.app_lookalike_domain.description, /10分に30回/);
+  assert.match(byName.app_lookalike_domain.description, /取引先のドメイン一覧/);
   ok(`定義表 ${APP_TOOLS.length} 件の形`);
 }
 
@@ -73,6 +75,10 @@ const jsonRes = (obj, status = 200, headers = {}) =>
   assert.ok(parse('app_meta_check', { url: 'https://example.com/' }).success);
   assert.ok(!parse('app_meta_check', {}).success);
   assert.ok(parse('app_ssl', { host: 'example.com' }).success);
+  assert.ok(parse('app_lookalike_domain', { sender: 'keiri@example.co.jp', trusted: ['example.co.jp'] }).success);
+  assert.ok(parse('app_lookalike_domain', { sender: 'keiri@example.co.jp' }).success, 'trusted は省ける（登録日と MX だけ）');
+  assert.ok(!parse('app_lookalike_domain', { trusted: ['example.co.jp'] }).success);
+  assert.ok(!parse('app_lookalike_domain', { sender: 'a@b.jp', trusted: new Array(51).fill('example.co.jp') }).success);
   assert.ok(parse('app_status_check', { urls: ['https://a.example/'] }).success);
   assert.ok(!parse('app_status_check', { urls: new Array(11).fill('https://a.example/') }).success);
   assert.ok(parse('app_redirect_map', { from: 'https://a/', to: 'https://b/' }).success);
