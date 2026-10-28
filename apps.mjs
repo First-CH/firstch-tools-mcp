@@ -205,6 +205,13 @@ const DEFS = [
     'URLのページの HTML と応答ヘッダーのシグネチャから、CMS（WordPress・Shopify・Wix・STUDIO 等）・フレームワーク・CDN・解析タグ（GA4/GTM）・Webフォントを推定し、そう判断した根拠（どこで何に合致したか）と一緒に返す。',
   ),
   urlApp(
+    'gaibu-soushinsaki',
+    '/gaibu-soushinsaki/api/inventory',
+    '外部タグ棚卸し（解析・広告・SNS埋め込み）',
+    'URLのページを1回だけ取得し、HTMLに書かれた script の src・img・iframe の外部ホストとインラインの設置スニペットを対応表（Google・Meta・Microsoft・LinkedIn・LINEヤフー・X の主要18サービス）と照合する。会社数・サービスごとの明細（一般的な用途・止める場所・公式資料の出典）・終了済みサービス（UA・オプティマイズ）の数・表にない外部ホストと、確認用の棚卸し表（CSV）を返す。HTMLに書かれたタグだけを見るもので、実際の送信や法令への適合は判定しない（タグマネージャー経由のタグは見えない）。',
+    { urlLabel: '棚卸しする自社サイトのページのURL' },
+  ),
+  urlApp(
     'wp-check',
     '/wp-check/api/check',
     'WordPress簡易診断',
