@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.First-CH/tools-mcp",
   "description": "Web production tools for AI agents: contrast, JP text, WebP, JSON-LD, slugs, dates and 40+ more",
-  "version": "0.39.0",
+  "version": "0.40.0",
   "repository": {
     "url": "https://github.com/First-CH/firstch-tools-mcp",
     "source": "github"
@@ -11,7 +11,7 @@
     {
       "registryType": "npm",
       "identifier": "@first-ch/tools-mcp",
-      "version": "0.39.0",
+      "version": "0.40.0",
       "transport": {
         "type": "stdio"
       },

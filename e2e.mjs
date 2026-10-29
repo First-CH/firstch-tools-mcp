@@ -6,7 +6,7 @@
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
 // color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert / slug_generate / htpasswd_generate / openapi_doc_generate /
-// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate / wiki_doc_lint) and returns the expected values — this catches
+// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate / wiki_doc_lint / fit_to_box) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -101,6 +101,7 @@ try {
     'dpi_calc',
     'encoding_convert',
     'faq_jsonld_generate',
+    'fit_to_box',
     'hash_generate',
     'html_escape',
     'html_to_markdown',
@@ -893,6 +894,16 @@ try {
   assert.match(wl.report, /^# 社内文書チェックの結果/);
   const wlErr = await request('tools/call', { name: 'wiki_doc_lint', arguments: { files: [{ path: 'a.md', text: 'x' }], threshold: 2 } }, 181);
   assert.ok(wlErr.result?.isError, `wiki_doc_lint should reject threshold 2: ${JSON.stringify(wlErr)}`);
+
+  // fit_to_box: 住所の割り付け・金額の大字・壊れた引数
+  const fb = await callTool('fit_to_box', { text: '北海道札幌市中央区見本通西二十丁目12番地の18 グランドメゾン見本ヒルズ東棟1203号室', postalCode: '000-0000', width: 20, height: 90 }, 182);
+  assert.equal(fb.charSizeMm, 3.6, `fit_to_box size mismatch: ${JSON.stringify(fb)}`);
+  assert.equal(fb.lines?.[2], 'グランドメゾン見本ヒルズ東棟一二〇三号室', `fit_to_box lines mismatch: ${JSON.stringify(fb.lines)}`);
+  assert.equal(fb.alternatives?.omitPrefecture?.fits4mm, true, `fit_to_box alternatives mismatch: ${JSON.stringify(fb.alternatives)}`);
+  const fbAmt = await callTool('fit_to_box', { kind: 'amount', text: '30000', width: 18, height: 60 }, 183);
+  assert.equal(fbAmt.daiji, '金参萬円', `fit_to_box daiji mismatch: ${JSON.stringify(fbAmt)}`);
+  const fbErr = await request('tools/call', { name: 'fit_to_box', arguments: { text: 'x', width: 20, height: 90, orientation: 'diagonal' } }, 184);
+  assert.ok(fbErr.result?.isError, `fit_to_box should reject a bad orientation: ${JSON.stringify(fbErr)}`);
 
   // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
   const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);

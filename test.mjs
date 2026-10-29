@@ -88,6 +88,7 @@ import { tmpdir as oaTmpdir } from 'node:os';
 import { join as oaJoin } from 'node:path';
 import { faqJsonldTool, build as faqBuild, parseBulk as faqParseBulk, parseAnswer as faqParseAnswer, FaqJsonldToolError } from './faq-jsonld.mjs';
 import { wikiDocLintTool, lintDocs as wdlLint, WikiDocLintError } from './wiki-doc-lint.mjs';
+import { fitToBoxTool, fitAddress as fbFitAddress, daiji as fbDaiji, splitAddress as fbSplit, unitsOf as fbUnits, PAD as FB_PAD, GAP as FB_GAP, FitToBoxError } from './fit-to-box.mjs';
 import { linesProcessTool, processLines, PRESETS as LINES_PRESETS, LinesToolError } from './lines.mjs';
 import {
   dpiCalcTool, dpiCalc, dpiReverse, dpiFor, dpiGrade, dpiTable, dpNum, fmt as dpFmt, bytes as dpBytes,
@@ -5043,6 +5044,50 @@ components:
   await assert.rejects(() => wikiDocLintTool({ files: [{ path: 'a.png', text: 'x' }] }), WikiDocLintError);
   await assert.rejects(() => wikiDocLintTool({ files: [{ path: 1, text: 'x' }] }), WikiDocLintError);
   console.log('wiki_doc_lint ok');
+}
+
+// ==================== fit_to_box ====================
+{
+  const LONG = '北海道札幌市中央区見本通西二十丁目12番地の18 グランドメゾン見本ヒルズ東棟1203号室';
+  // 縦書き 20×90mm: 「〜番地」と「建物名」で改行し、番地は漢数字。4mm 未満なので代わりの割り付けが付く
+  const v = fitToBoxTool({ text: LONG, postalCode: '0000000', width: 20, height: 90 });
+  assert.equal(v.ok, true);
+  assert.equal(v.charSizeMm, 3.6);
+  assert.deepEqual(v.lines, ['〒〇〇〇ー〇〇〇〇', '北海道札幌市中央区見本通西二十丁目一二番地の一八', 'グランドメゾン見本ヒルズ東棟一二〇三号室']);
+  assert.equal(v.fits4mm, false);
+  assert.equal(v.alternatives.omitPrefecture.charSizeMm, 4.1);
+  assert.deepEqual(v.alternatives.buildingTwoLines.lines.slice(2), ['グランドメゾン見本ヒルズ東棟', '一二〇三号室']);
+  assert.ok(v.asIs.overflowChars > 0);
+  // 横書きは算用数字のまま・4mm 以上なら代わりを返さない
+  const h = fitToBoxTool({ text: LONG, width: 100, height: 16, orientation: 'horizontal' });
+  assert.deepEqual(h.lines, ['北海道札幌市中央区見本通西二十丁目12番地の18', 'グランドメゾン見本ヒルズ東棟1203号室']);
+  assert.equal(h.alternatives, undefined);
+  // 「北4条」の 4 は町名・十型の漢数字
+  assert.equal(fbSplit('札幌市中央区北4条西3丁目1-2 ABCビル2F').building, 'ABCビル2F');
+  assert.match(fitToBoxTool({ text: '東京都港区六本木6-10-1', width: 20, height: 90, numerals: 'tens' }).lines.join(''), /六本木六ー十ー一$/);
+  // どの寸法でも欄の中に収まる
+  for (const o of ['vertical', 'horizontal']) for (const [w, hh] of [[14, 60], [20, 90], [60, 12], [80, 18], [40, 40]]) {
+    const r = fbFitAddress({ address: LONG, postal: '1234567', width: w, height: hh, orientation: o });
+    const L = (o === 'vertical' ? hh : w) - 2 * FB_PAD, C = (o === 'vertical' ? w : hh) - 2 * FB_PAD, s = r.main.size, n = r.main.lines.length;
+    assert.ok(s * Math.max(...r.main.lines.map((l) => fbUnits(l, o === 'vertical' ? 'v' : 'h'))) <= L + 1e-6);
+    assert.ok(s * n + s * FB_GAP * (n - 1) <= C + 1e-6);
+  }
+  // 金額・氏名
+  const a = fitToBoxTool({ kind: 'amount', text: '3万', width: 18, height: 60 });
+  assert.equal(a.daiji, '金参萬円');
+  assert.equal(fitToBoxTool({ kind: 'amount', text: '15000', width: 18, height: 60, yenChar: '圓', nari: true, thousandChar: '千' }).daiji, '金壱萬伍千圓也');
+  assert.equal(fitToBoxTool({ kind: 'amount', text: '30000', width: 18, height: 60, kinEnPrinted: true }).daiji, '参萬');
+  assert.equal(fbDaiji(100000), '金壱拾萬円');
+  assert.equal(fitToBoxTool({ kind: 'amount', text: '0', width: 18, height: 60 }).error.code, 'BAD_AMOUNT');
+  assert.deepEqual(fitToBoxTool({ kind: 'name', text: '見本 花子', width: 14, height: 70 }).lines, ['見本 花子']);
+  // 空・小さすぎる欄は ok:false、壊れた引数は例外
+  assert.equal(fitToBoxTool({ text: '', width: 20, height: 90 }).error.code, 'EMPTY');
+  assert.equal(fitToBoxTool({ text: LONG, width: 3, height: 90, lang: 'en' }).error.code, 'TOO_SMALL');
+  assert.throws(() => fitToBoxTool({ text: LONG, width: 0, height: 90 }), FitToBoxError);
+  assert.throws(() => fitToBoxTool({ text: LONG, width: 20, height: 90, kind: 'x' }), FitToBoxError);
+  assert.throws(() => fitToBoxTool({ text: LONG, width: 20, height: 90, orientation: 'up' }), FitToBoxError);
+  assert.throws(() => fitToBoxTool({ width: 20, height: 90 }), FitToBoxError);
+  console.log('fit_to_box ok');
 }
 
 console.log('all tests passed');

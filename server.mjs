@@ -46,6 +46,7 @@ import { dpiCalcTool } from './dpi.mjs';
 import { serpCheckTool } from './serp.mjs';
 import { cssLayoutGenerateTool } from './css-layout.mjs';
 import { wikiDocLintTool } from './wiki-doc-lint.mjs';
+import { fitToBoxTool } from './fit-to-box.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 // SDK v2 の serveStdio は接続ごとに factory から McpServer を1つ作る（旧仕様の initialize と
@@ -1960,6 +1961,43 @@ registerTool(
   async (opts) => {
     await logUsage('wiki_doc_lint');
     return asText(await wikiDocLintTool(opts));
+  },
+);
+
+registerTool(
+  'fit_to_box',
+  {
+    title: '記入欄に収める字の大きさと改行位置',
+    description:
+      '印刷済みの記入欄（市販の中袋〔ご祝儀袋・香典袋〕の「住所」「金額」「氏名」の欄など）に手で書くとき、欄の幅・高さ（mm）と向きから、' +
+      '文字列が収まる1字の大きさ（mm・0.1mm 単位で切り捨て）・行数・改行した後の各行を返す（tools.first-ch.com/nakabukuro-ran/ と同一ロジック）。' +
+      '字の大きさは、欄の線から内側へ1.5mmずつ余白を取り、行間を字の大きさの0.3倍として、行の長さと行数の両方から決める' +
+      '（横書きでは半角英数を全角の0.6字分で数える。上限は住所9mm・金額と氏名14mm・plain 12mm）。' +
+      '`kind="address"`（既定）は住所を「〜番地」と「建物名・部屋番号」の境目で改行し、そこで4mmに届かないときだけ都道府県・市区町村の後や番地の前でも区切る' +
+      '（「12番地の18」「1203号室」など数字の並びの途中では切らない・text に改行を入れるとそこを建物名の前として扱う・最大4行）。' +
+      'postalCode を渡すと「〒」付きの1行を先頭に足す。縦書きの欄では番地の数字を漢数字（numerals: "digits"=一〇型 / "tens"=十型）にする。' +
+      '1字が4mmを下回るときは alternatives に「都道府県を省いた場合」と「建物名を2行にした場合」の大きさと行を返す（省いてよいかは判断しない）。' +
+      'asIs は改行せずに1字5mmで書いたときに欄の外へはみ出す字数。' +
+      '`kind="amount"` は金額（30000・3万・30,000円）を大字（壱・弐・参・四・伍・六・七・八・九・拾・百・阡・萬）の「金参萬円」にして欄に合わせる（1〜99,999,999円・圓/也/「金」「円」が印刷済みに対応）。' +
+      '`kind="name"` は氏名（空白でだけ改行）、`kind="plain"` は任意の文字列。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      text: z.string().describe('欄に書く文字列（住所・金額・氏名など）'),
+      width: z.number().describe('欄の幅（mm・線の内側を定規で測った値）'),
+      height: z.number().describe('欄の高さ（mm）'),
+      orientation: z.enum(['vertical', 'horizontal']).optional().describe("書く向き（既定 'vertical'＝縦書き）"),
+      kind: z.enum(['address', 'name', 'amount', 'plain']).optional().describe("文字列の種類（既定 'address'）"),
+      postalCode: z.string().optional().describe('kind=address で欄の先頭に書く郵便番号（例: 100-0001）'),
+      numerals: z.enum(['digits', 'tens']).optional().describe("縦書きの漢数字の書き方（'digits'＝一〇・一二〔既定〕/ 'tens'＝十・十二）"),
+      thousandChar: z.enum(['阡', '千', '仟']).optional().describe("kind=amount の千の字（既定 '阡'）"),
+      yenChar: z.enum(['円', '圓']).optional().describe("kind=amount の円の字（既定 '円'）"),
+      nari: z.boolean().optional().describe('kind=amount で末尾に「也」を付ける（既定 false）'),
+      kinEnPrinted: z.boolean().optional().describe('kind=amount で欄に「金」「円」が印刷済み（返す文字列から除く・既定 false）'),
+      lang: z.enum(['ja', 'en']).optional().describe("エラー・注記の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('fit_to_box');
+    return asText(fitToBoxTool(opts));
   },
 );
 
