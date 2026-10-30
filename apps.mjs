@@ -198,6 +198,26 @@ const DEFS = [
     'URLのページ内の img / picture を抽出し、フォーマット（WebP・AVIF 対応）・loading=lazy・width/height の指定・alt を診断する。先頭30枚は HEAD リクエストで実際のファイルサイズと形式まで測る。',
     { slow: true },
   ),
+  {
+    slug: 'gazou-ichijouhou',
+    apiPath: '/gazou-ichijouhou/api/check',
+    title: '写真の位置情報チェック（元画像に撮影場所が残っていないか）',
+    summary:
+      'URLのページから表示中の JPEG と、WordPress の元画像の候補（-幅x高さ・-scaled を外した同じサーバーのURL）を組にして、Exif に撮影場所（GPS の緯度・経度）が残っていないかを調べる。' +
+      '1回の呼び出しで offset から5組を判定し、組の一覧（先頭20組）・各画像の状態（found／none／unknown／unsupported）と理由・次に呼ぶ offset（next）を返す。20組すべてを調べるには next が null になるまで offset を 0・5・10・15 と変えて呼ぶ。' +
+      '座標・撮影日時の値と画像のバイト列は返さない。「none」は調べた範囲で見つからなかったという意味で、安全の保証ではない。同じIPから10分に40回まで（超えると HTTP 429）。',
+    sends: '入力したURL',
+    fetches: true,
+    slow: true,
+    inputSchema: {
+      url: URL_PARAM('写真を載せているページのURL'),
+      offset: z
+        .union([z.literal(0), z.literal(5), z.literal(10), z.literal(15)])
+        .optional()
+        .describe('何組目から5組を調べるか（0・5・10・15。既定 0）。前回の応答の next を渡す'),
+      lang: LANG,
+    },
+  },
   urlApp(
     'tech-detect',
     '/tech-detect/api/detect',

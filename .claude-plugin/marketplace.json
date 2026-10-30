@@ -8,7 +8,7 @@
     {
       "name": "firstch-tools",
       "source": "./plugins/firstch-tools",
-      "description": "First CH Tools MCP server: 42 local tools for web production (WCAG contrast, JP char count, WebP, JSON-LD, llms.txt, Marp slides, format conversion and developer utilities) plus 35 opt-in app_* tools that send a URL, domain or text to apps.first-ch.com for site checks (SEO/GEO, headers, SSL, DNS, links, readability)"
+      "description": "First CH Tools MCP server: 42 local tools for web production (WCAG contrast, JP char count, WebP, JSON-LD, llms.txt, Marp slides, format conversion and developer utilities) plus 36 opt-in app_* tools that send a URL, domain or text to apps.first-ch.com for site checks (SEO/GEO, headers, SSL, DNS, links, readability)"
     }
   ]
 }

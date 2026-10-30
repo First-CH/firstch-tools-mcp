@@ -82,6 +82,12 @@ const jsonRes = (obj, status = 200, headers = {}) =>
   assert.ok(parse('app_gaibu_soushinsaki', { url: 'https://example.com/', lang: 'en' }).success);
   assert.ok(!parse('app_gaibu_soushinsaki', {}).success, 'url は必須');
   assert.ok(!parse('app_gaibu_soushinsaki', { url: 'https://example.com/' + 'a'.repeat(2048) }).success, 'URL は2,048字まで');
+  assert.ok(parse('app_gazou_ichijouhou', { url: 'https://example.com/' }).success, 'offset は省ける');
+  assert.ok(parse('app_gazou_ichijouhou', { url: 'https://example.com/', offset: 15, lang: 'en' }).success);
+  assert.ok(!parse('app_gazou_ichijouhou', { offset: 0 }).success, 'url は必須');
+  assert.ok(!parse('app_gazou_ichijouhou', { url: 'https://example.com/', offset: 3 }).success, 'offset は5の倍数');
+  assert.ok(!parse('app_gazou_ichijouhou', { url: 'https://example.com/', offset: 20 }).success, 'offset は15まで');
+  assert.ok(!parse('app_gazou_ichijouhou', { url: 'https://example.com/' + 'a'.repeat(2048) }).success, 'URL は2,048字まで');
   assert.ok(parse('app_status_check', { urls: ['https://a.example/'] }).success);
   assert.ok(!parse('app_status_check', { urls: new Array(11).fill('https://a.example/') }).success);
   assert.ok(parse('app_redirect_map', { from: 'https://a/', to: 'https://b/' }).success);
