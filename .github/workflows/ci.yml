@@ -85,6 +85,27 @@ jobs:
           // Dev-only files that must NOT leak into the published package.
           const forbidden = ['test.mjs', 'test-apps.mjs', 'e2e.mjs'];
 
+          // server.mjs から相対パスで辿れるファイルは、固定の一覧に頼らず全部
+          // tarball に入っているかを見る（0.40.0・0.41.0 で fit-to-box.mjs を
+          // files に足し忘れ、npx で起動できなかった。npm test と e2e.mjs は
+          // ソースのまま動かすので、配布物の欠けを拾えない）。
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const refs = /(?:import|export)\s[^'"]*?from\s*['"](\.[^'"]+)['"]|import\(\s*['"](\.[^'"]+)['"]\s*\)|import\s*['"](\.[^'"]+)['"]|new URL\(\s*['"](\.[^'"]+)['"]/g;
+          const reached = new Set();
+          const walk = (f) => {
+            if (reached.has(f)) return;
+            reached.add(f);
+            if (!/\.m?js$/.test(f)) return;
+            const src = fs.readFileSync(f, 'utf8');
+            for (const m of src.matchAll(refs)) {
+              const p = path.normalize(path.join(path.dirname(f), m[1] || m[2] || m[3] || m[4]));
+              if (fs.existsSync(p)) walk(p);
+            }
+          };
+          walk('server.mjs');
+          for (const f of reached) required.push(f);
+
           const missing = required.filter((f) => !files.includes(f));
           const leaked = forbidden.filter((f) => files.includes(f));
 
