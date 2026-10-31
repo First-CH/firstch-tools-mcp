@@ -1,7 +1,7 @@
 {
   "name": "firstch-tools",
   "displayName": "First CH Tools",
-  "version": "0.42.0",
+  "version": "0.42.1",
   "description": "44 local MCP tools for web production and development work, from the free browser tools at tools.first-ch.com: WCAG contrast checks, Japanese character / X-weight counting, WebP conversion, JSON-LD, llms.txt and robots.txt generation, Marp slides, encoding and format conversion (JSON/YAML/CSV/Markdown tables), wiki-export checks for duplicates, orphan pages and inconsistent terms, fitting Japanese addresses into printed boxes, and everyday developer utilities. They run on your machine via npx and send nothing. Plus 36 app_* tools (off by default; enable with FIRSTCH_ENABLE_APPS=1) that call the web apps at apps.first-ch.com and send their input (a URL, domain or text) there; the apps store nothing.",
   "author": {
     "name": "First CH LLC",
