@@ -218,6 +218,20 @@ const DEFS = [
       lang: LANG,
     },
   },
+  {
+    slug: 'hp-sumaho-check',
+    apiPath: '/hp-sumaho-check/api/check',
+    title: 'うちのHP、スマホで見て3つ教えて｜確認依頼カード（電話リンク・横ずれ・文字と拡大）',
+    summary:
+      'URLのページの HTML と同じサイトの CSS（最大3本・解析は合計96KB／2,000規則まで）から、スマホで人に見てもらうべき3項目を判定する。' +
+      '①電話: 本文の電話番号ごとに tel: リンクがあるか（format-detection telephone=no も併記） ②横ずれ: viewport の width=device-width と、body・#wrapper 等の900px以上の固定 width／min-width ' +
+      '③文字と拡大: user-scalable=no・maximum-scale=1・body／p の12px未満。各項目を check（要確認）／none（記述なし）／unknown（判定できない・理由つき）で返し、記述の位置（HTMLの行・CSSのファイルと行）・直し方の要点と、' +
+      'はい／いいえで答える質問（要確認を優先して最大3問）・ref 付きの共有URLを返す。合否・点数は出さず、実機の表示を判定したものではない。ページと CSS の原文は返さない。同じIPから10分に20回まで（超えると HTTP 429）。',
+    sends: '入力したURL',
+    fetches: true,
+    slow: false,
+    inputSchema: { url: URL_PARAM('確かめるホームページのURL'), lang: LANG },
+  },
   urlApp(
     'tech-detect',
     '/tech-detect/api/detect',
