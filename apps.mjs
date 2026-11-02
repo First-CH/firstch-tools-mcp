@@ -66,12 +66,27 @@ const DEFS = [
     'GEO簡易チェッカー（AI検索に引用されやすいか）',
     'URLのページが AI検索（ChatGPT・Perplexity・Gemini・AI Overviews）に引用されやすい構造かを6軸100点で診断し、軸ごとの点数・グレード・見つかった JSON-LD の型・AIクローラーの拒否状況・改善点を返す。',
   ),
-  urlApp(
-    'meta-check',
-    '/meta-check/api/inspect',
-    'メタタグ・SEO基本診断',
-    'URLのページの title・meta description・canonical・robots・h1・OGP・lang・viewport を取得して合否つきで返す。文字数（title 全角32字・description 100〜170字）と robots.txt のクロール可否も判定する。',
-  ),
+  {
+    ...urlApp(
+      'meta-check',
+      '/meta-check/api/inspect',
+      'メタタグ・SEO基本診断',
+      'URLのページの title・meta description・canonical・robots・h1・OGP・lang・viewport を取得して合否つきで返す。文字数（title 全角32字・description 100〜170字）と robots.txt のクロール可否も判定する。' +
+        'expected に期待する title・meta description・最初の h1 を渡すと、配信中の HTML と照合した結果（一致・不一致・未検出・比較不能）を expectedComparison に返す（保存の成功や検索エンジンへの反映は判定しない）。',
+    ),
+    inputSchema: {
+      url: URL_PARAM(),
+      expected: z
+        .object({
+          title: z.string().max(500).optional().describe('期待する title（500字まで）'),
+          description: z.string().max(500).optional().describe('期待する meta description（500字まで）'),
+          h1: z.string().max(500).optional().describe('期待する最初の h1（500字まで）'),
+        })
+        .optional()
+        .describe('CMS で保存したつもりの値が配信 HTML に出ているかを照合する期待値（任意・3項目の合計1500字まで）。渡さなければ従来の診断だけを返す'),
+      lang: LANG,
+    },
+  },
   urlApp(
     'headers',
     '/headers/api/inspect',
@@ -130,7 +145,7 @@ const DEFS = [
     'link-check',
     '/link-check/api/inspect',
     'リンク切れ・alt属性チェック',
-    'URLのページ内のリンク（a href）を抽出して最大40件の生死を確認し、404などのリンク切れ・空のリンク文字・target=_blank の危険な指定を返す。画像の alt の欠落・ファイル名のままの alt も一覧する。対象は渡した1ページだけ（サイト全体はクロールしない）。',
+    'URLのページ内のリンク（a href）を抽出して最大40件の生死を確認し、404などのリンク切れ・空のリンク文字・target=_blank の危険な指定を返す。画像の alt の欠落・ファイル名のままの alt も一覧する。同じページを指す # リンクの行き先（id）が取得した HTML にあるかも fragments に返す。対象は渡した1ページだけ（サイト全体はクロールしない）。',
     { slow: true },
   ),
   urlApp(

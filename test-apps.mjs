@@ -74,6 +74,9 @@ const jsonRes = (obj, status = 200, headers = {}) =>
   const parse = (name, v) => z.object(byName[name].inputSchema).safeParse(v);
   assert.ok(parse('app_meta_check', { url: 'https://example.com/' }).success);
   assert.ok(!parse('app_meta_check', {}).success);
+  assert.ok(parse('app_meta_check', { url: 'https://example.com/', expected: { title: 'Example Domain', h1: 'Example' } }).success);
+  assert.ok(!parse('app_meta_check', { url: 'https://example.com/', expected: { title: 'x'.repeat(501) } }).success);
+  assert.ok(!parse('app_meta_check', { url: 'https://example.com/', expected: { title: 1 } }).success);
   assert.ok(parse('app_ssl', { host: 'example.com' }).success);
   assert.ok(parse('app_lookalike_domain', { sender: 'keiri@example.co.jp', trusted: ['example.co.jp'] }).success);
   assert.ok(parse('app_lookalike_domain', { sender: 'keiri@example.co.jp' }).success, 'trusted は省ける（登録日と MX だけ）');
@@ -118,6 +121,14 @@ const jsonRes = (obj, status = 200, headers = {}) =>
 // ---------------------------------------------------------------------------
 // HTTP 呼び出し
 // ---------------------------------------------------------------------------
+
+// app_meta_check は期待値をそのまま本文の expected に入れて送る
+{
+  const f = mockFetch(() => jsonRes({ expectedComparison: [] }));
+  await callAppTool(byName.app_meta_check, { url: 'https://example.com/', expected: { title: 'Example Domain' }, lang: 'en' }, { fetch: f, baseUrl: '' });
+  assert.equal(f.calls[0].url, `${DEFAULT_APPS_BASE_URL}/en/meta-check/api/inspect`);
+  assert.deepEqual(f.calls[0].body, { url: 'https://example.com/', expected: { title: 'Example Domain' } });
+}
 
 // 既定のベース URL・メソッド・ヘッダー・本文・応答の受け渡し
 {

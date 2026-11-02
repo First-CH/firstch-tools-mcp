@@ -100,7 +100,7 @@ Each `app_*` tool calls one app's public JSON API (`POST https://apps.first-ch.c
 | Tool | App and what it does | Main input |
 | --- | --- | --- |
 | `app_geo` | [GEO Checker](https://apps.first-ch.com/en/geo/) — Enter a URL and get a six-axis, 100-point diagnosis of how citable your site is for AI search. | `url` |
-| `app_meta_check` | [Meta Tag & SEO Basics Check](https://apps.first-ch.com/en/meta-check/) — Enter a URL to grade its title, meta description, canonical, robots, h1, OGP, lang and viewport. Character counts and robots.txt crawlability are checked too. | `url` |
+| `app_meta_check` | [Meta Tag & SEO Basics Check](https://apps.first-ch.com/en/meta-check/) — Enter a URL to grade its title, meta description, canonical, robots, h1, OGP, lang and viewport. Character counts and robots.txt crawlability are checked too. Pass `expected` (title / description / h1) to compare them with the served HTML. | `url`, `expected` |
 | `app_headers` | [Security Header Grader](https://apps.first-ch.com/en/headers/) — Enter a URL to grade CSP, HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy and Permissions-Policy out of 100, with an A–F verdict, plain-language explanations and recommended values. | `url` |
 | `app_ssl` | [SSL/TLS Certificate Checker](https://apps.first-ch.com/en/ssl/) — Enter a hostname and we run a real TLS handshake to read the certificate being served: expiry, days remaining, issuer, SAN and the intermediate chain, with a warning under 30 days. | `host` |
 | `app_redirect_trace` | [Redirect Chain Tracer](https://apps.first-ch.com/en/redirect-trace/) — Enter a URL and we follow 301, 302, 307, 308 and meta refresh redirects one hop at a time, listing the status, URL and timing of each step, the final destination, and an SEO warning at three or more hops. | `url` |
@@ -287,7 +287,7 @@ claude mcp add firstch-tools -- npx -y @first-ch/tools-mcp
 | ツール | アプリと内容 | 主な入力 |
 | --- | --- | --- |
 | `app_geo` | [GEO簡易チェッカー](https://apps.first-ch.com/geo/) — URLのページが AI検索（ChatGPT・Perplexity・Gemini・AI Overviews）に引用されやすい構造かを6軸100点で診断し、軸ごとの点数・グレード・見つかった JSON-LD の型・AIクローラーの拒否状況・改善点を返す。 | `url` |
-| `app_meta_check` | [メタタグ・SEO基本診断](https://apps.first-ch.com/meta-check/) — URLのページの title・meta description・canonical・robots・h1・OGP・lang・viewport を取得して合否つきで返す。文字数（title 全角32字・description 100〜170字）と robots.txt のクロール可否も判定する。 | `url` |
+| `app_meta_check` | [メタタグ・SEO基本診断](https://apps.first-ch.com/meta-check/) — URLのページの title・meta description・canonical・robots・h1・OGP・lang・viewport を取得して合否つきで返す。文字数（title 全角32字・description 100〜170字）と robots.txt のクロール可否も判定する。`expected`（title・description・h1）を渡すと配信 HTML と照合する。 | `url`, `expected` |
 | `app_headers` | [セキュリティヘッダー採点](https://apps.first-ch.com/headers/) — URLの応答の CSP・HSTS・X-Content-Type-Options・X-Frame-Options・Referrer-Policy・Permissions-Policy を100点満点で採点し、A〜Fの評価・各ヘッダーの値・解説と推奨設定例を返す。 | `url` |
 | `app_ssl` | [SSL/TLS証明書チェッカー](https://apps.first-ch.com/ssl/) — ホスト名へサーバー側から実際に TLS 接続し、配信中の証明書の有効期限・残り日数・発行者・SAN・中間証明書のチェーンを返す（期限30日切れで警告）。接続できないときは CT ログの記録から読む。 | `host` |
 | `app_redirect_trace` | [リダイレクトチェーン追跡](https://apps.first-ch.com/redirect-trace/) — URLから 301・302・307・308・meta refresh の転送を1ホップずつ追跡し（最大5回）、各ステップのステータス・URL・所要時間と最終到達URLを返す。3回以上の転送には SEO 上の警告を付ける。 | `url` |
