@@ -234,6 +234,28 @@ const DEFS = [
     },
   },
   {
+    slug: 'shashin-sozai-moto',
+    apiPath: '/shashin-sozai-moto/api/check',
+    title: 'HP乗り換え前の写真名義チェック（素材サイト形式の名前・撮影者や権利者の記載）',
+    summary:
+      'URLのページの HTML にある img・srcset・picture の写真を最大30枚拾い、①ファイル名が素材サイト形式（現在は AdobeStock_数字 のみ）か（stock）、' +
+      '②JPEG だけ先頭128KBの XMP・IPTC にある撮影者・クレジット・著作権表記（credits。各60字まで・URL も文字列のまま）を返す。' +
+      '1回の呼び出しで offset から10枚を判定し、写真の一覧（ファイル名・URL・形式・stock）・各写真の状態（found＝記載あり／none＝JPEG を読み切って記載なし／unsupported＝JPEG 以外／unknown＝取得や解析が完了しない）と理由・次に呼ぶ offset（next）を返す。' +
+      '30枚すべてを調べるには next が null になるまで offset を 0・10・20 と変えて呼ぶ。31件目以降は一覧だけで未検査。CSS の背景画像と JavaScript で後から足される画像は対象外。' +
+      '画像のバイト列とページの原文は返さない。権利関係や違法性は判定しない（制作会社へ名義・譲渡・乗り換え後の利用を確かめる手がかり）。同じIPから10分に30回まで（超えると HTTP 429）。',
+    sends: '入力したURL',
+    fetches: true,
+    slow: true,
+    inputSchema: {
+      url: URL_PARAM('写真を載せているページのURL'),
+      offset: z
+        .union([z.literal(0), z.literal(10), z.literal(20)])
+        .optional()
+        .describe('何枚目から10枚を調べるか（0・10・20。既定 0）。前回の応答の next を渡す'),
+      lang: LANG,
+    },
+  },
+  {
     slug: 'hp-sumaho-check',
     apiPath: '/hp-sumaho-check/api/check',
     title: 'うちのHP、スマホで見て3つ教えて｜確認依頼カード（電話リンク・横ずれ・文字と拡大）',
