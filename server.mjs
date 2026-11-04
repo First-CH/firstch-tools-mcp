@@ -47,6 +47,7 @@ import { serpCheckTool } from './serp.mjs';
 import { cssLayoutGenerateTool } from './css-layout.mjs';
 import { wikiDocLintTool } from './wiki-doc-lint.mjs';
 import { fitToBoxTool } from './fit-to-box.mjs';
+import { invoiceNebikiTool } from './invoice-nebiki.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 // SDK v2 の serveStdio は接続ごとに factory から McpServer を1つ作る（旧仕様の initialize と
@@ -1998,6 +1999,40 @@ registerTool(
   async (opts) => {
     await logUsage('fit_to_box');
     return asText(fitToBoxTool(opts));
+  },
+);
+
+registerTool(
+  'invoice_nebiki_check',
+  {
+    title: 'インボイス値下げ、応じる前に相手へ聞く3問チェック',
+    description:
+      'インボイス発行事業者でない側（個人のデザイナー・ライターなど）が取引先から値下げを求められたとき、取引先に控除の減り（差）が本当に出るかを時期別に返す' +
+      '（tools.first-ch.com/invoice-nebiki/ と同一ロジック）。' +
+      '入力は3問: method（取引先の申告方式 general=一般課税 / simplified=簡易課税 / niwari=2割特例 / sanwari=3割特例 / exempt=免税事業者・消費者 / unknown）、' +
+      'party（individual / corporation・2割特例と3割特例では必須）、small（1回の請求が税込1万円未満か yes / no / unknown）。monthly（月の請求額・税込10%）と cutRate（%）か cutAmount（円/月）は任意。' +
+      'rows は today を含む時期から、判定が同じ時期をまとめて status=diff（差あり・monthlyDiff＝税込×10/110×pct% の1円未満切り捨て）/ none（差なし）/ check（要確認）を返す。' +
+      'pct は経過措置で控除できなくなる割合（2026年9月まで20%・2026年10月から30%・2028年10月から50%・2030年10月から70%・2031年10月から100%）。' +
+      '2割特例の差なしは個人2026年分まで・法人は2026年9月30日を含む課税期間まで、3割特例は個人の2027・2028年分だけで、期限後は recheck:true（方式の再確認が必要・簡易課税へ移ったとは仮定しない）。' +
+      '一般課税で small が yes/unknown なら、少額特例（2029年9月30日までの仕入れ）があるため2029年9月までは要確認。' +
+      'questions と message は要確認の項目だけを尋ねる確認文（要確認が無ければ見込みを伝える文。format="md" で Markdown）。前提（概算・全額控除と保存要件・法人税等を含めない・特例の可否は相手が判断）は premises と message に必ず付く。' +
+      'showAmount:false で金額を出さない。自分の納税額・登録の要否・違法かどうか・相手の方式や規模の推定は扱わない。入力の誤りは InvoiceNebikiError（code 付き）。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      method: z.enum(['general', 'simplified', 'niwari', 'sanwari', 'exempt', 'unknown']).optional().describe("取引先の消費税の申告方式（既定 'unknown'）"),
+      party: z.enum(['individual', 'corporation']).optional().describe('取引先が個人事業者か法人か（niwari / sanwari では必須）'),
+      small: z.enum(['yes', 'no', 'unknown']).optional().describe("1回の請求が税込1万円未満か（既定 'unknown'）"),
+      monthly: z.number().optional().describe('月の請求額（円・税込10%。任意）'),
+      cutRate: z.number().optional().describe('言われた値下げの率（%・0〜100。cutAmount とどちらか）'),
+      cutAmount: z.number().optional().describe('言われた値下げの額（円/月。cutRate とどちらか）'),
+      today: z.string().optional().describe('基準日 YYYY-MM-DD（省略時はサーバーの今日）'),
+      format: z.enum(['text', 'md']).optional().describe("message の形式（既定 'text'）"),
+      showAmount: z.boolean().optional().describe('金額を返すか（既定 true。false なら割合だけ）'),
+      lang: z.enum(['ja', 'en']).optional().describe("文言の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('invoice_nebiki_check');
+    return asText(invoiceNebikiTool(opts));
   },
 );
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 43 local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
+// returns all 44 local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
 // API via FIRSTCH_APPS_BASE_URL, never to the network), and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
 // color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert / slug_generate / htpasswd_generate / openapi_doc_generate /
-// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate / wiki_doc_lint / fit_to_box) and returns the expected values — this catches
+// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate / wiki_doc_lint / fit_to_box / invoice_nebiki_check) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -102,6 +102,7 @@ try {
     'encoding_convert',
     'faq_jsonld_generate',
     'fit_to_box',
+    'invoice_nebiki_check',
     'hash_generate',
     'html_escape',
     'html_to_markdown',
@@ -904,6 +905,16 @@ try {
   assert.equal(fbAmt.daiji, '金参萬円', `fit_to_box daiji mismatch: ${JSON.stringify(fbAmt)}`);
   const fbErr = await request('tools/call', { name: 'fit_to_box', arguments: { text: 'x', width: 20, height: 90, orientation: 'diagonal' } }, 184);
   assert.ok(fbErr.result?.isError, `fit_to_box should reject a bad orientation: ${JSON.stringify(fbErr)}`);
+
+  // invoice_nebiki_check: 時期別の判定・確認文・壊れた引数
+  const nb = await callTool('invoice_nebiki_check', { method: 'general', small: 'no', monthly: 55000, cutRate: 10, today: '2026-11-05' }, 185);
+  assert.deepEqual(nb.rows?.map((r) => r.monthlyDiff), [1500, 2500, 3500, 5000], `invoice_nebiki_check rows mismatch: ${JSON.stringify(nb.rows)}`);
+  assert.equal(nb.comparison?.ratio, 3.7);
+  const nbAsk = await callTool('invoice_nebiki_check', { method: 'niwari', party: 'individual', today: '2026-11-05', lang: 'en' }, 186);
+  assert.deepEqual(nbAsk.questions?.map((q) => q.id), ['niwari_ind']);
+  assert.match(nbAsk.message, /2027/);
+  const nbErr = await request('tools/call', { name: 'invoice_nebiki_check', arguments: { method: 'sanwari' } }, 187);
+  assert.ok(nbErr.result?.isError, `invoice_nebiki_check should require party: ${JSON.stringify(nbErr)}`);
 
   // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
   const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);

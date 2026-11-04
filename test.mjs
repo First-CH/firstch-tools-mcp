@@ -89,6 +89,7 @@ import { join as oaJoin } from 'node:path';
 import { faqJsonldTool, build as faqBuild, parseBulk as faqParseBulk, parseAnswer as faqParseAnswer, FaqJsonldToolError } from './faq-jsonld.mjs';
 import { wikiDocLintTool, lintDocs as wdlLint, WikiDocLintError } from './wiki-doc-lint.mjs';
 import { fitToBoxTool, fitAddress as fbFitAddress, daiji as fbDaiji, splitAddress as fbSplit, unitsOf as fbUnits, PAD as FB_PAD, GAP as FB_GAP, FitToBoxError } from './fit-to-box.mjs';
+import { invoiceNebikiTool, InvoiceNebikiError, judge as nbJudge } from './invoice-nebiki.mjs';
 import { linesProcessTool, processLines, PRESETS as LINES_PRESETS, LinesToolError } from './lines.mjs';
 import {
   dpiCalcTool, dpiCalc, dpiReverse, dpiFor, dpiGrade, dpiTable, dpNum, fmt as dpFmt, bytes as dpBytes,
@@ -5088,6 +5089,44 @@ components:
   assert.throws(() => fitToBoxTool({ text: LONG, width: 20, height: 90, orientation: 'up' }), FitToBoxError);
   assert.throws(() => fitToBoxTool({ width: 20, height: 90 }), FitToBoxError);
   console.log('fit_to_box ok');
+}
+
+// ==================== invoice_nebiki_check ====================
+{
+  const T0 = '2026-11-05';
+  const g = invoiceNebikiTool({ method: 'general', party: 'corporation', small: 'no', monthly: 55000, cutRate: 10, today: T0 });
+  assert.equal(g.ok, true);
+  assert.deepEqual(g.rows.map((r) => [r.from, r.to, r.status, r.pct, r.monthlyDiff]), [
+    ['2026-10', '2028-09', 'diff', 30, 1500], ['2028-10', '2030-09', 'diff', 50, 2500], ['2030-10', '2031-09', 'diff', 70, 3500], ['2031-10', null, 'diff', 100, 5000]]);
+  assert.equal(g.comparison.kind, 'ratio');
+  assert.equal(g.comparison.ratio, 3.7);
+  assert.deepEqual(g.questions, []);
+  assert.equal(g.fragment, 'm=general&s=no&p=c&a=55000&c=r10');
+  // 率の境界（2026-09-30 は20%・10-01 は30%）
+  assert.equal(nbJudge({ method: 'general', small: 'no', today: '2026-09-30' }).rows[0].pct, 20);
+  assert.equal(nbJudge({ method: 'general', small: 'no', today: '2026-10-01' }).rows[0].pct, 30);
+  // 2割特例・3割特例・少額特例
+  const ni = invoiceNebikiTool({ method: 'niwari', party: 'individual', today: T0 });
+  assert.deepEqual(ni.rows.slice(0, 2).map((r) => [r.status, r.recheck]), [['none', false], ['check', true]]);
+  assert.deepEqual(ni.questions.map((q) => q.id), ['niwari_ind']);
+  const sa = invoiceNebikiTool({ method: 'sanwari', party: 'individual', today: T0 });
+  assert.deepEqual(sa.rows.slice(0, 3).map((r) => [r.from, r.to, r.status]), [['2026-10', '2026-12', 'check'], ['2027-01', '2028-12', 'none'], ['2029-01', '2030-09', 'check']]);
+  const sm = invoiceNebikiTool({ method: 'general', small: 'yes', monthly: 55000, today: T0 });
+  assert.deepEqual(sm.rows.map((r) => r.status), ['check', 'check', 'diff', 'diff', 'diff']);
+  assert.equal(sm.rows[0].monthlyDiff, null);
+  assert.equal(sm.rows[0].ifStandardMonthlyDiff, 1500);
+  // 金額を出さない指定
+  const hid = invoiceNebikiTool({ method: 'general', small: 'no', monthly: 55000, cutRate: 10, showAmount: false, today: T0 });
+  assert.ok(hid.rows.every((r) => r.monthlyDiff === null));
+  assert.doesNotMatch(hid.message + hid.comparison.text, /月[\d,]+円/);
+  // 前提は文面に必ず付く
+  for (const p of ['概算です', '保存要件', '法人税', '貴社のご判断']) assert.ok(sm.message.includes(p), p);
+  assert.match(invoiceNebikiTool({ method: 'unknown', format: 'md', lang: 'en', today: T0 }).message, /^- Corporate and income tax/m);
+  // 入力の誤り
+  assert.throws(() => invoiceNebikiTool({ method: 'sanwari' }), (e) => e instanceof InvoiceNebikiError && e.code === 'PARTY_REQUIRED');
+  assert.throws(() => invoiceNebikiTool({ method: 'general', cutRate: 10, cutAmount: 100 }), (e) => e.code === 'INVALID_CUT');
+  assert.throws(() => invoiceNebikiTool({ method: 'general', today: 'tomorrow' }), (e) => e.code === 'INVALID_TODAY');
+  console.log('invoice_nebiki_check ok');
 }
 
 console.log('all tests passed');
