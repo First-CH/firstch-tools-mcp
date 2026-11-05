@@ -29,7 +29,7 @@ const SENDS = (what) =>
 const FETCHES = 'apps.first-ch.com のサーバーが対象のサイトへアクセスするので、相手のサーバーにはこちらの端末ではなく apps.first-ch.com からのアクセスとして記録される。';
 const RESULT = '応答は API の JSON をそのまま返す（入力の不備・相手サイトに届かない等は error と message つきのエラーになる）。';
 const AI_LIMIT =
-  '**回数制限あり**: 同じIPから10分に5回まで、さらに app_tone_check と app_lp_persona_check の合計で1日50回まで（日本時間9時にリセット）。' +
+  '**回数制限あり**: 同じIPから10分に5回まで、さらに app_tone_check・app_lp_persona_check・app_henji_kuru の合計で1日50回まで（日本時間9時にリセット）。' +
   '超えると HTTP 429（rate_limited / daily_limit）が返るので、間を置くか翌日に回す。AI による参考意見で、結果は毎回少し変わりうる。';
 
 const LANG = z
@@ -479,6 +479,33 @@ const DEFS = [
     slow: true,
     inputSchema: {
       urls: z.array(z.string().min(1).max(2048)).min(1).max(3).describe('照合するページURLの配列（1〜3件・同じサイト）'),
+      lang: LANG,
+    },
+  },
+  {
+    slug: 'henji-kuru',
+    apiPath: '/henji-kuru/api/read',
+    title: 'LINEの出欠の返事の判定（AI・出欠集計の要確認行）',
+    summary:
+      'LINEグループの出欠確認（○＝参加・×＝不参加・△＝未定）への返事のうち、型に合わない行（「私も」「前の件は欠席」など）を1〜10行受け取り、行ごとに区分（yes / no / maybe / unclear）・人数・短い理由を返す。' +
+      '各行は返事の本文と、任意で直前の発言（context）。サーバー側でも電話・メール・@の宛先・「〜さん」の前の名前を伏せてから判定するが、送る前に名前・連絡先は伏せておくこと。' +
+      'トーク履歴全体の集計（募集文より前・期限後の除外、○×△と人数の数え上げ）は apps.first-ch.com/henji-kuru/ の端末内の処理で、この API は行わない。' +
+      'この API には合計50回とは別に1日15回の枠があり（合計の内数）、枠か合計を使い切ると daily_limit になる。',
+    sends: '入力した返事の行と直前の発言',
+    ai: true,
+    slow: true,
+    inputSchema: {
+      lines: z
+        .array(
+          z.object({
+            text: z.string().min(1).max(300).describe('返事の本文（300文字まで）'),
+            context: z.string().max(300).optional().describe('直前の発言（任意・300文字まで）。「私も」の判断に使う'),
+          }),
+        )
+        .min(1)
+        .max(10)
+        .describe('判定する返事の行（1〜10件）'),
+      count: z.boolean().optional().describe('募集で人数も聞いたなら true（既定 true）。false なら count は常に null'),
       lang: LANG,
     },
   },

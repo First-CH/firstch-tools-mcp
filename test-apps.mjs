@@ -53,15 +53,15 @@ const jsonRes = (obj, status = 200, headers = {}) =>
     z.object(d.inputSchema);
     assert.ok([DEFAULT_TIMEOUT_MS, SLOW_TIMEOUT_MS].includes(d.timeoutMs));
   }
-  // AI を使う2本は回数制限を説明に書く
-  for (const n of ['app_tone_check', 'app_lp_persona_check']) {
+  // AI を使う3本は回数制限を説明に書く
+  for (const n of ['app_tone_check', 'app_lp_persona_check', 'app_henji_kuru']) {
     assert.equal(byName[n].ai, true);
     assert.match(byName[n].description, /回数制限あり/);
     assert.match(byName[n].description, /1日50回/);
     assert.match(byName[n].description, /10分に5回/);
     assert.equal(byName[n].timeoutMs, SLOW_TIMEOUT_MS, 'AI 側のタイムアウト45秒より長く待つ');
   }
-  assert.equal(APP_TOOLS.filter((d) => d.ai).length, 2);
+  assert.equal(APP_TOOLS.filter((d) => d.ai).length, 3);
   assert.match(byName.app_nap_check.description, /10分に10回/);
   assert.match(byName.app_redirect_map.description, /1分に60組/);
   assert.match(byName.app_lookalike_domain.description, /10分に30回/);
@@ -97,6 +97,13 @@ const jsonRes = (obj, status = 200, headers = {}) =>
   assert.ok(!parse('app_shashin_sozai_moto', { url: 'https://example.com/', offset: 5 }).success, 'offset は10の倍数');
   assert.ok(!parse('app_shashin_sozai_moto', { url: 'https://example.com/', offset: 30 }).success, 'offset は20まで');
   assert.ok(!parse('app_shashin_sozai_moto', { url: 'https://example.com/' + 'a'.repeat(2048) }).success, 'URL は2,048字まで');
+  assert.ok(parse('app_henji_kuru', { lines: [{ text: '私も', context: '○2' }], count: true }).success);
+  assert.ok(parse('app_henji_kuru', { lines: [{ text: '前の件は欠席' }], lang: 'en' }).success, 'context と count は省ける');
+  assert.ok(!parse('app_henji_kuru', {}).success, 'lines は必須');
+  assert.ok(!parse('app_henji_kuru', { lines: [] }).success, 'lines は1件以上');
+  assert.ok(!parse('app_henji_kuru', { lines: new Array(11).fill({ text: '私も' }) }).success, 'lines は10件まで');
+  assert.ok(!parse('app_henji_kuru', { lines: [{ text: 'あ'.repeat(301) }] }).success, '本文は300字まで');
+  assert.ok(!parse('app_henji_kuru', { lines: [{ text: '私も', context: 'あ'.repeat(301) }] }).success, '直前の発言は300字まで');
   assert.ok(parse('app_hp_sumaho_check', { url: 'https://example.com/', lang: 'ja' }).success);
   assert.ok(!parse('app_hp_sumaho_check', { lang: 'ja' }).success, 'url は必須');
   assert.ok(!parse('app_hp_sumaho_check', { url: 'https://example.com/' + 'a'.repeat(2048) }).success, 'URL は2,048字まで');
