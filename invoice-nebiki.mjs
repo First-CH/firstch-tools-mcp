@@ -193,7 +193,10 @@ function pick(v, list, name) {
 
 function isoDay(d) {
   if (d == null || d === '') { var n = new Date(); return n.getFullYear() + '-' + String(n.getMonth() + 1).padStart(2, '0') + '-' + String(n.getDate()).padStart(2, '0'); }
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(d))) throw new InvoiceNebikiError('INVALID_TODAY', 'today must be YYYY-MM-DD');
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(d));
+  var t = m && new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  // 形式だけでなく実在する日付か（2026-13-45 や 2026-02-29 を時期の判定に通さない）
+  if (!t || t.getUTCFullYear() !== +m[1] || t.getUTCMonth() !== +m[2] - 1 || t.getUTCDate() !== +m[3]) throw new InvoiceNebikiError('INVALID_TODAY', 'today must be an existing date in YYYY-MM-DD');
   return String(d);
 }
 
@@ -373,7 +376,8 @@ export function decodeState(hash) {
   var out = {};
   String(hash || '').replace(/^#/, '').split('&').forEach(function (kv) {
     var i = kv.indexOf('='); if (i < 0) return;
-    var k = kv.slice(0, i), v = decodeURIComponent(kv.slice(i + 1));
+    var k = kv.slice(0, i), v;
+    try { v = decodeURIComponent(kv.slice(i + 1)); } catch (e) { return; }   // 壊れた % はその項目だけ読まない
     if (k === 'm' && METHODS.indexOf(v) >= 0) out.method = v;
     if (k === 's' && SMALLS.indexOf(v) >= 0) out.small = v;
     if (k === 'p' && (v === 'i' || v === 'c')) out.party = v === 'i' ? 'individual' : 'corporation';
@@ -385,6 +389,12 @@ export function decodeState(hash) {
 // ===== ここまでコア =====
 
 // ---- MCP の入口 ----
+// showAmount:false で、額の値下げを月額なしで渡したとき（率が出せない）の比較の文。額を伏せたまま状況だけを伝える
+const HIDDEN_CUT = {
+  ja: { noDiff: '今の時期、前提のもとで相手側の差は出ない見込みです（値下げの額は伏せています）。', check: '要確認の点が分かるまで、相手側の差は確定しません（値下げの額は伏せています）。' },
+  en: { noDiff: 'For now, under these assumptions, they see no difference (the cut amount is hidden).', check: 'Their difference is not fixed until the open points are confirmed (the cut amount is hidden).' },
+};
+
 export function invoiceNebikiTool(opts = {}) {
   const lang = opts.lang === 'en' ? 'en' : 'ja';
   const showAmount = opts.showAmount !== false;
@@ -393,9 +403,13 @@ export function invoiceNebikiTool(opts = {}) {
   const r = judge({ method: opts.method, party: opts.party, small: opts.small, monthly: opts.monthly, cut, today: opts.today });
   const L = T[lang];
   const cmp = showAmount ? r.compare : { ...r.compare, cutAmount: null, diffAmount: null };
+  // 金額を出さない指定では、返り値の input と fragment からも額（月額・額の値下げ）を外す。率の値下げは額ではないので残す
+  const cutOut = showAmount || !r.input.cut || r.input.cut.type === 'rate' ? r.input.cut : { type: 'amount', value: null };
+  const shown = { ...r.input, monthly: showAmount ? r.input.monthly : null, cut: cutOut };
+  const hiddenCut = !showAmount && cmp.cutPct == null && (cmp.kind === 'noDiff' || cmp.kind === 'check');
   return {
     ok: true,
-    input: { ...r.input, methodLabel: L.method[r.input.method] },
+    input: { ...shown, methodLabel: L.method[r.input.method] },
     rows: r.rows.map((row) => {
       const t = rowText(row, lang, showAmount);
       return { from: row.from, to: row.to, status: row.status, statusLabel: t.status, recheck: row.recheck, current: row.now,
@@ -403,10 +417,10 @@ export function invoiceNebikiTool(opts = {}) {
         monthlyDiff: showAmount ? row.amount : null, ifStandardMonthlyDiff: showAmount && row.status === 'check' ? row.hintAmount : null,
         label: t.label, text: row.status === 'diff' ? t.value : row.status === 'check' ? t.hint : '', note: t.note };
     }),
-    comparison: { ...cmp, text: cutText({ ...r, compare: cmp }, lang) },
+    comparison: { ...cmp, text: hiddenCut ? HIDDEN_CUT[lang][cmp.kind] : cutText({ ...r, compare: cmp }, lang) },
     questions: r.questions.map((q) => ({ id: q, text: L.msg.q[q] })),
     message: buildMessage(r, { lang, format: opts.format === 'md' ? 'md' : 'text', showAmount }),
     premises: L.premises,
-    fragment: encodeState({ method: r.input.method, party: r.input.party, small: r.input.small, monthly: r.input.monthly, cut: r.input.cut }),
+    fragment: encodeState({ method: r.input.method, party: r.input.party, small: r.input.small, monthly: shown.monthly, cut: cutOut && cutOut.value != null ? cutOut : null }),
   };
 }

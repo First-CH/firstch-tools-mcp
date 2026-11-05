@@ -5119,6 +5119,24 @@ components:
   const hid = invoiceNebikiTool({ method: 'general', small: 'no', monthly: 55000, cutRate: 10, showAmount: false, today: T0 });
   assert.ok(hid.rows.every((r) => r.monthlyDiff === null));
   assert.doesNotMatch(hid.message + hid.comparison.text, /月[\d,]+円/);
+  // 金額を出さない指定では、返り値の input・fragment にも額を残さない（そのまま共有されて漏れる）
+  const hid2 = invoiceNebikiTool({ method: 'general', small: 'no', monthly: 55000, cutAmount: 5000, showAmount: false, today: T0 });
+  assert.doesNotMatch(JSON.stringify(hid2), /55000|5000|55,000|5,000/);
+  assert.equal(hid2.fragment, 'm=general&s=no');
+  assert.equal(hid2.input.monthly, null);
+  assert.equal(hid2.input.cut.type, 'amount');
+  assert.doesNotMatch(hid.fragment, /a=/);
+  assert.match(hid.fragment, /c=r10/);   // 率は額ではないので残す
+  // 額で値下げを渡し月額が無いとき、金額を伏せても「null%」と出さない
+  for (const [method, kind] of [['general', 'needMonthly'], ['exempt', 'noDiff'], ['unknown', 'check']]) {
+    const h = invoiceNebikiTool({ method, small: 'no', cutAmount: 5000, showAmount: false, today: T0 });
+    assert.equal(h.comparison.kind, kind, method);
+    assert.doesNotMatch(h.comparison.text, /null|undefined|5,?000/, method);
+    const he = invoiceNebikiTool({ method, small: 'no', cutAmount: 5000, showAmount: false, lang: 'en', today: T0 });
+    assert.doesNotMatch(he.comparison.text, /null|undefined|5,?000/, method);
+  }
+  // 金額を出す既定は従来どおり
+  assert.equal(invoiceNebikiTool({ method: 'exempt', small: 'no', cutAmount: 5000, today: T0 }).fragment, 'm=exempt&s=no&c=y5000');
   // 前提は文面に必ず付く
   for (const p of ['概算です', '保存要件', '法人税', '貴社のご判断']) assert.ok(sm.message.includes(p), p);
   assert.match(invoiceNebikiTool({ method: 'unknown', format: 'md', lang: 'en', today: T0 }).message, /^- Corporate and income tax/m);
@@ -5126,6 +5144,8 @@ components:
   assert.throws(() => invoiceNebikiTool({ method: 'sanwari' }), (e) => e instanceof InvoiceNebikiError && e.code === 'PARTY_REQUIRED');
   assert.throws(() => invoiceNebikiTool({ method: 'general', cutRate: 10, cutAmount: 100 }), (e) => e.code === 'INVALID_CUT');
   assert.throws(() => invoiceNebikiTool({ method: 'general', today: 'tomorrow' }), (e) => e.code === 'INVALID_TODAY');
+  assert.throws(() => invoiceNebikiTool({ method: 'general', today: '2026-13-45' }), (e) => e.code === 'INVALID_TODAY');
+  assert.throws(() => invoiceNebikiTool({ method: 'general', today: '2026-02-29' }), (e) => e.code === 'INVALID_TODAY');
   console.log('invoice_nebiki_check ok');
 }
 

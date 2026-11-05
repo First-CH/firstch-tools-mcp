@@ -2026,7 +2026,7 @@ registerTool(
       cutAmount: z.number().optional().describe('言われた値下げの額（円/月。cutRate とどちらか）'),
       today: z.string().optional().describe('基準日 YYYY-MM-DD（省略時はサーバーの今日）'),
       format: z.enum(['text', 'md']).optional().describe("message の形式（既定 'text'）"),
-      showAmount: z.boolean().optional().describe('金額を返すか（既定 true。false なら割合だけ）'),
+      showAmount: z.boolean().optional().describe('金額を返すか（既定 true。false なら割合だけで、返り値の input・fragment からも月額と額の値下げを外す）'),
       lang: z.enum(['ja', 'en']).optional().describe("文言の言語（既定 'ja'）"),
     },
   },
