@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 45 local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
+// returns all 46 local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
 // API via FIRSTCH_APPS_BASE_URL, never to the network), and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
 // color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert / slug_generate / htpasswd_generate / openapi_doc_generate /
-// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate / wiki_doc_lint / fit_to_box / invoice_nebiki_check / reply_check) and returns the expected values — this catches
+// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate / wiki_doc_lint / fit_to_box / invoice_nebiki_check / reply_check / comfy_png_leak_scan) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -90,6 +90,7 @@ try {
     'base64_encode',
     'case_convert',
     'cidr_calc',
+    'comfy_png_leak_scan',
     'color_convert',
     'contrast_check',
     'count_chars',
@@ -923,6 +924,16 @@ try {
   assert.deepEqual(rcRes.count, { red: 3, yellow: 1, green: 1 });
   const rcErr = await request('tools/call', { name: 'reply_check', arguments: { received: 'x', reply: '' } }, 189);
   assert.ok(rcErr.result?.isError, `reply_check should require reply: ${JSON.stringify(rcErr)}`);
+
+  // comfy_png_leak_scan: 見本の PNG（架空のキー）を base64 で渡し、場所と伏せた値・お知らせ文が返る。壊れた引数はエラー
+  const { makeSamplePng } = await import('./comfy-png-leak.mjs');
+  const ck = await callTool('comfy_png_leak_scan', { base64: Buffer.from(makeSamplePng(16, 8)).toString('base64') }, 190);
+  assert.equal(ck.status, 'found', `comfy_png_leak_scan status: ${JSON.stringify(ck)}`);
+  assert.deepEqual(ck.findings?.map((f) => f.place), ['ノードID 12（ExampleGeminiPrompt）の入力欄「api_key」', 'ノードID 12 の widgets_values の 3 番目', 'ノードID 15 の widgets_values の 2 番目']);
+  assert.ok(ck.findings.every((f) => /^.{4}•{12}$/.test(f.masked)));
+  assert.match(ck.notice, /有効かどうかと、書き込まれた原因は確認していません/);
+  const ckErr = await request('tools/call', { name: 'comfy_png_leak_scan', arguments: { path: 'relative.png' } }, 191);
+  assert.ok(ckErr.result?.isError, `comfy_png_leak_scan should require an absolute path: ${JSON.stringify(ckErr)}`);
 
   // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
   const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);

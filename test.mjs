@@ -90,6 +90,7 @@ import { faqJsonldTool, build as faqBuild, parseBulk as faqParseBulk, parseAnswe
 import { wikiDocLintTool, lintDocs as wdlLint, WikiDocLintError } from './wiki-doc-lint.mjs';
 import { fitToBoxTool, fitAddress as fbFitAddress, daiji as fbDaiji, splitAddress as fbSplit, unitsOf as fbUnits, PAD as FB_PAD, GAP as FB_GAP, FitToBoxError } from './fit-to-box.mjs';
 import { invoiceNebikiTool, InvoiceNebikiError, judge as nbJudge } from './invoice-nebiki.mjs';
+import { comfyPngLeakTool, ComfyPngLeakError, scanPng as ckScan, makePng as ckMakePng, makeSamplePng as ckSample, textChunk as ckText, rawChunk as ckRaw, fakeKey as ckFake, asciiJson as ckJson, MAX_BYTES as CK_MAX } from './comfy-png-leak.mjs';
 import { replyCheckTool, samples as rcSamples, ReplyCheckError, REPLY_CHECK_MAX_CHARS } from './reply-check.mjs';
 import { linesProcessTool, processLines, PRESETS as LINES_PRESETS, LinesToolError } from './lines.mjs';
 import {
@@ -5215,6 +5216,55 @@ components:
   assert.throws(() => replyCheckTool({ reply: 'a', today: '2026-02-29' }), (e) => e.code === 'INVALID_TODAY');
   assert.throws(() => replyCheckTool({ reply: 'a', today: 'tomorrow' }), (e) => e.code === 'INVALID_TODAY');
   console.log('reply_check ok');
+}
+
+// ==================== comfy_png_leak_scan ====================
+{
+  const { mkdtemp, writeFile: ckWrite, readFile: ckRead } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join: ckJoin } = await import('node:path');
+  const dir = await mkdtemp(ckJoin(tmpdir(), 'ck-'));
+  const px = () => [1, 2, 3];
+  // 見本（架空のキー）: prompt の場所・迂回ノード・伏せた値・お知らせ文
+  const s = await comfyPngLeakTool({ base64: Buffer.from(ckSample(16, 8)).toString('base64') });
+  assert.equal(s.status, 'found');
+  assert.deepEqual(s.kinds, ['google', 'replicate']);
+  assert.equal(s.findings[0].input, 'api_key');
+  assert.deepEqual(s.findings[0].classType, ['ExampleGeminiPrompt']);
+  assert.equal(s.findings[2].bypassed, true);
+  assert.equal(s.findings[2].fieldUnknown, true);
+  assert.ok(!JSON.stringify(s).includes(ckFake('google', 'SAMPLE').slice(4, 14)), 'no raw value');
+  assert.equal(s.revoke[0].links[0].url, 'https://console.cloud.google.com/apis/credentials');
+  assert.ok(s.caution);
+  // 重複キー・ノード名の書き換え・workflow だけ
+  const dup = ckScan(ckMakePng(2, 2, px, [ckText('prompt', '{"5":{"inputs":{"api_key":"' + ckFake('anthropic') + '","api_key":""},"class_type":"ClaudeNode","_meta":{"title":"KSampler"}}}')]));
+  assert.equal(dup.findings[0].dupKey, true);
+  assert.equal(dup.findings[0].kind, 'anthropic');
+  const wf = ckScan(ckMakePng(2, 2, px, [ckText('workflow', ckJson({ nodes: [{ id: 7, title: 'Save', widgets_values: ['x', ckFake('huggingface')] }] }))]));
+  assert.equal(wf.findings[0].widgetIndex, 1);
+  assert.equal(wf.findings[0].input, undefined);
+  // 4つの状態
+  assert.equal(ckScan(ckMakePng(2, 2, px, [ckText('prompt', '{}')])).status, 'none');
+  assert.equal(ckScan(ckMakePng(2, 2, px, [ckRaw('zTXt', [65, 0, 0, 0x78, 0x9c, 3, 0])])).status, 'unchecked');
+  const bad = ckMakePng(2, 2, px, [ckText('prompt', '{"a":1}')]); bad[45] ^= 1;
+  assert.equal(ckScan(bad).status, 'failed');
+  // 書き出し: 読み直して確かめる・元を上書きしない・caBX は書き換えない
+  const src = ckJoin(dir, 'in.png'), dst = ckJoin(dir, 'out.png');
+  await ckWrite(src, ckSample(16, 8));
+  const w = await comfyPngLeakTool({ path: src, outPath: dst, lang: 'en' });
+  assert.deepEqual(w.stripped.removed, ['tEXt', 'tEXt']);
+  assert.equal(w.stripped.verify.ok, true);
+  assert.equal(ckScan(new Uint8Array(await ckRead(dst))).status, 'none');
+  assert.match(w.notice, /^A quick heads-up/);
+  await assert.rejects(() => comfyPngLeakTool({ path: src, outPath: dst }), (e) => e.code === 'EEXIST');
+  await assert.rejects(() => comfyPngLeakTool({ path: src, outPath: src, overwrite: true }), (e) => e instanceof ComfyPngLeakError && e.code === 'SAME_FILE');
+  const cab = ckJoin(dir, 'cab.png');
+  await ckWrite(cab, ckMakePng(2, 2, px, [ckRaw('caBX', [1, 2]), ckText('a', 'b')]));
+  await assert.rejects(() => comfyPngLeakTool({ path: cab, outPath: ckJoin(dir, 'cab2.png') }), (e) => e.code === 'HAS_CABX');
+  await assert.rejects(() => comfyPngLeakTool({ path: 'in.png' }), (e) => e.code === 'PATH_NOT_ABSOLUTE');
+  await assert.rejects(() => comfyPngLeakTool({}), (e) => e.code === 'NO_INPUT');
+  assert.equal(CK_MAX, 30 * 1024 * 1024);
+  console.log('comfy_png_leak_scan ok');
 }
 
 console.log('all tests passed');

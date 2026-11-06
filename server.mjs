@@ -48,6 +48,7 @@ import { cssLayoutGenerateTool } from './css-layout.mjs';
 import { wikiDocLintTool } from './wiki-doc-lint.mjs';
 import { fitToBoxTool } from './fit-to-box.mjs';
 import { invoiceNebikiTool } from './invoice-nebiki.mjs';
+import { comfyPngLeakTool } from './comfy-png-leak.mjs';
 import { replyCheckTool } from './reply-check.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
@@ -2061,6 +2062,32 @@ registerTool(
   async (opts) => {
     await logUsage('reply_check');
     return asText(replyCheckTool(opts));
+  },
+);
+
+registerTool(
+  'comfy_png_leak_scan',
+  {
+    title: '受け取ったComfyUI画像のキー点検とお知らせ文',
+    description:
+      'ComfyUI の PNG の埋め込みデータ（tEXt・非圧縮 iTXt の prompt・workflow など）から APIキーの形（AIza・sk-・sk-ant-・hf_・r8_）を探す（tools.first-ch.com/comfy-key-leak/ と同一ロジック）。' +
+      'status は found（キーの形あり）/ none（見つからず。安全という意味ではない）/ unchecked（zTXt・圧縮 iTXt・eXIf・caBX・不明なチャンク・IEND の後ろ・30MB超で読めない部分がある）/ failed（CRC 不一致・途中で切れた・PNG でない）。' +
+      'findings の場所は prompt なら nodeId・classType・input、workflow だけなら nodeId と widgetIndex（入力欄名は特定できない・fieldUnknown）。JSON は重複キーの前の値も捨てずに読み、inputs の外（extra）・迂回ノード（bypassed）・JSON の外の文字も拾う。ノードの表示名（title）は使わない。' +
+      '値は返さない（masked＝先頭4字＋伏せ字と length だけ）。notice はキーの持ち主へのお知らせ文（値・ファイル名なし、有効性と原因は確認していないと書く）。revoke は見つかった種類の公式の無効化画面。' +
+      'outPath を渡すと tEXt・iTXt・zTXt を抜いたコピーを書き、書く前に読み直して文字のチャンク0個・残したチャンクのバイト一致を確かめる（元のファイルは変えない・caBX 付きと壊れた PNG は書き換えない・既存ファイルは overwrite:true が無いと上書きしない）。' +
+      'キーが有効かどうかの確認・URL からの取得・JPEG/WebP の書き換えはしない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      path: z.string().optional().describe('PNG の絶対パス（path か base64 のどちらか）'),
+      base64: z.string().optional().describe('PNG の Base64（data URI 可）'),
+      outPath: z.string().optional().describe('文字のチャンクを抜いたコピーの書き出し先（絶対パス・任意）'),
+      overwrite: z.boolean().optional().describe('outPath に既存ファイルがあるとき上書きするか（既定 false）'),
+      includeUrl: z.boolean().optional().describe('お知らせ文に確認に使ったページの URL を添えるか（既定 true）'),
+      lang: z.enum(['ja', 'en']).optional().describe("文言の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('comfy_png_leak_scan');
+    return asText(await comfyPngLeakTool(opts));
   },
 );
 
