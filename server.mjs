@@ -48,6 +48,7 @@ import { cssLayoutGenerateTool } from './css-layout.mjs';
 import { wikiDocLintTool } from './wiki-doc-lint.mjs';
 import { fitToBoxTool } from './fit-to-box.mjs';
 import { invoiceNebikiTool } from './invoice-nebiki.mjs';
+import { replyCheckTool } from './reply-check.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 // SDK v2 の serveStdio は接続ごとに factory から McpServer を1つ作る（旧仕様の initialize と
@@ -2033,6 +2034,33 @@ registerTool(
   async (opts) => {
     await logUsage('invoice_nebiki_check');
     return asText(invoiceNebikiTool(opts));
+  },
+);
+
+registerTool(
+  'reply_check',
+  {
+    title: 'AIの返信案の送る前チェック（日付・金額・宛名などの照合）',
+    description:
+      '届いたメール（received）と、任意の「自分で決めた事実」（facts：営業時間・料金・日程など）を、AI が書いた返信案（reply）と照らし合わせる（tools.first-ch.com/okurumae/ と同一ロジック）。' +
+      '返信案から日付・曜日・時刻・金額・数量（〇名・〇泊・%）・電話番号・メールアドレス・URL・宛名（〇〇様・Dear Ms. …）・番号を拾い、received と facts のどちらにも無いものを status=red（reasons に missing）、あるものを green、' +
+      '[お客様1]・〇〇・XX・【】・{name} などの消し忘れを yellow（placeholder）で返す。日付と曜日の食い違い（例: 2026年11月8日（金））と存在しない日付も red（weekday / nodate・date に実際の曜日）。' +
+      '年の書かれていない日付は today の60日前〜305日後に入る年で曜日を確かめる。全角/半角・カンマ・「18時30分」と「18:30」・「3千円」と「3,000円」は照合のときだけそろえ、本文は書き換えない。' +
+      'items の start / end は reply の中の位置（JavaScript の文字列の添字＝UTF-16）、line / column は1始まり。hits は一致した原文の箇所（1項目5件まで・hitCount は全数）。' +
+      'count は全項目の件数で、items は500件まで（超えたら truncated:true）。赤が0件でも内容の正しさは保証しない（note）。自動修正・文体の添削・伏せ字はしない。' +
+      '各欄2万字まで。入力の誤りは ReplyCheckError（code 付き）。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      received: z.string().optional().describe('届いたメール（返信の元になった原文）'),
+      reply: z.string().describe('AI が書いた返信案（照合する文章）'),
+      facts: z.string().optional().describe('自分で決めた事実（営業時間・料金・日程・電話番号など。任意）'),
+      today: z.string().optional().describe('基準日 YYYY-MM-DD（年の無い日付の年を決めるのに使う。省略時はサーバーの今日）'),
+      includeGreen: z.boolean().optional().describe('緑（一致した項目）も items に入れるか（既定 true）'),
+      lang: z.enum(['ja', 'en']).optional().describe("message・note の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('reply_check');
+    return asText(replyCheckTool(opts));
   },
 );
 
