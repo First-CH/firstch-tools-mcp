@@ -5236,6 +5236,17 @@ components:
   assert.ok(!JSON.stringify(s).includes(ckFake('google', 'SAMPLE').slice(4, 14)), 'no raw value');
   assert.equal(s.revoke[0].links[0].url, 'https://console.cloud.google.com/apis/credentials');
   assert.ok(s.caution);
+  // お知らせ文: MCP ではページもブラウザも使っていないので「使いました」「送っていません」と書かない。URL はページの案内として添える
+  assert.doesNotMatch(s.notice, /使いました|ブラウザの外へ送っていません/);
+  assert.match(s.notice, /同じ点検は https:\/\/tools\.first-ch\.com\/comfy-key-leak\/ でもできます/);
+  assert.equal((await comfyPngLeakTool({ base64: Buffer.from(ckSample(16, 8)).toString('base64'), includeUrl: false })).notice.includes('tools.first-ch.com'), false);
+  const sEn = await comfyPngLeakTool({ base64: Buffer.from(ckSample(16, 8)).toString('base64'), lang: 'en' });
+  assert.doesNotMatch(sEn.notice, /Checked with|was not sent anywhere/);
+  assert.match(sEn.notice, /same check at https:\/\/tools\.first-ch\.com\/en\/comfy-key-leak\//);
+  assert.equal((await comfyPngLeakTool({ base64: Buffer.from(ckMakePng(2, 2, () => [1, 2, 3], [ckText('prompt', '{}')])).toString('base64') })).notice, '', 'no notice when nothing found');
+  // base64 で渡した画像は会話に載っている（キーが既にモデルの文脈へ渡った）ことを返す。path では付けない
+  assert.match(s.inputNote, /会話/);
+  assert.match(sEn.inputNote, /conversation/);
   // 重複キー・ノード名の書き換え・workflow だけ
   const dup = ckScan(ckMakePng(2, 2, px, [ckText('prompt', '{"5":{"inputs":{"api_key":"' + ckFake('anthropic') + '","api_key":""},"class_type":"ClaudeNode","_meta":{"title":"KSampler"}}}')]));
   assert.equal(dup.findings[0].dupKey, true);
@@ -5256,6 +5267,7 @@ components:
   assert.equal(w.stripped.verify.ok, true);
   assert.equal(ckScan(new Uint8Array(await ckRead(dst))).status, 'none');
   assert.match(w.notice, /^A quick heads-up/);
+  assert.equal(w.inputNote, undefined, 'path input needs no note');
   await assert.rejects(() => comfyPngLeakTool({ path: src, outPath: dst }), (e) => e.code === 'EEXIST');
   await assert.rejects(() => comfyPngLeakTool({ path: src, outPath: src, overwrite: true }), (e) => e instanceof ComfyPngLeakError && e.code === 'SAME_FILE');
   const cab = ckJoin(dir, 'cab.png');

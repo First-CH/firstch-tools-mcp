@@ -422,6 +422,15 @@ export class ComfyPngLeakError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 
+// お知らせ文。コアの「確認には〜を使いました・送っていません」はページで確かめたときの文なので使わず、MCP ではページを同じ点検ができる場所として添える
+function mcpNotice(res, lang, withUrl) {
+  const base = buildNotice(res, lang, { url: false });
+  if (!base || !withUrl) return base;
+  return base + '\n' + (lang === 'en'
+    ? '(You can run the same check at https://tools.first-ch.com/en/comfy-key-leak/ — the page does not send the image anywhere.)'
+    : '（同じ点検は https://tools.first-ch.com/comfy-key-leak/ でもできます。ページは画像をブラウザの外へ送りません）');
+}
+
 export async function comfyPngLeakTool(opts = {}) {
   const lang = opts.lang === 'en' ? 'en' : 'ja';
   let bytes = null, size = 0, source;
@@ -446,12 +455,17 @@ export async function comfyPngLeakTool(opts = {}) {
     kinds: res.kinds,
     revoke: res.kinds.map((k) => ({ kind: k, links: REVOKE[k].map((r) => ({ label: r[lang], url: r.url })) })),
     unchecked: res.unchecked, chunks: res.chunks, hasCaBX: res.hasCaBX, hasExif: res.hasExif, canStrip: res.canStrip,
-    notice: buildNotice(res, lang, { url: opts.includeUrl === false ? false : undefined }),
+    notice: mcpNotice(res, lang, opts.includeUrl !== false),
     caution: res.status === 'found'
       ? (lang === 'en' ? 'If the image has already been posted or delivered and the key is in use, deleting the image is not enough; disable the key in the provider dashboard. Validity was not checked.'
         : '投稿・納品済みで、実際に使っているキーなら、画像を消すだけでは対処できません。発行元の画面でキーを無効にしてください。キーが有効かどうかは確かめていません。')
       : null,
   };
+  if (source === 'base64') {
+    out.inputNote = lang === 'en'
+      ? 'This image was passed as base64, so its bytes (including any embedded key) are already in this AI conversation and were sent to the model provider. This tool itself sends nothing, but treat a found key as exposed. Pass path next time.'
+      : 'base64 で渡した画像は、埋め込まれたキーを含めて既にこの AI との会話に載り、モデルの提供元へ送られています。このツール自体は何も送りませんが、見つかったキーは外へ出たものとして扱ってください。次からは path で渡してください。';
+  }
   if (opts.outPath) {
     if (!path.isAbsolute(opts.outPath)) throw new ComfyPngLeakError('PATH_NOT_ABSOLUTE', 'outPath must be an absolute path');
     if (opts.path && path.resolve(opts.outPath) === path.resolve(opts.path)) throw new ComfyPngLeakError('SAME_FILE', 'outPath must differ from path (the original is never overwritten)');

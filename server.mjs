@@ -2075,13 +2075,14 @@ registerTool(
       'findings の場所は prompt なら nodeId・classType・input、workflow だけなら nodeId と widgetIndex（入力欄名は特定できない・fieldUnknown）。JSON は重複キーの前の値も捨てずに読み、inputs の外（extra）・迂回ノード（bypassed）・JSON の外の文字も拾う。ノードの表示名（title）は使わない。' +
       '値は返さない（masked＝先頭4字＋伏せ字と length だけ）。notice はキーの持ち主へのお知らせ文（値・ファイル名なし、有効性と原因は確認していないと書く）。revoke は見つかった種類の公式の無効化画面。' +
       'outPath を渡すと tEXt・iTXt・zTXt を抜いたコピーを書き、書く前に読み直して文字のチャンク0個・残したチャンクのバイト一致を確かめる（元のファイルは変えない・caBX 付きと壊れた PNG は書き換えない・既存ファイルは overwrite:true が無いと上書きしない）。' +
-      'キーが有効かどうかの確認・URL からの取得・JPEG/WebP の書き換えはしない。完全ローカル処理・ネットワーク送信なし。',
+      'キーが有効かどうかの確認・URL からの取得・JPEG/WebP の書き換えはしない。このツールはネットワークへ何も送らない。' +
+      '入力は path を優先する: base64 で渡すと画像のバイト列（埋め込まれた生のキーを含む）が会話に載り、モデルの提供元へ渡る（そのとき返り値に inputNote が付く）。',
     inputSchema: {
-      path: z.string().optional().describe('PNG の絶対パス（path か base64 のどちらか）'),
-      base64: z.string().optional().describe('PNG の Base64（data URI 可）'),
+      path: z.string().optional().describe('PNG の絶対パス（path か base64 のどちらか。こちらを優先）'),
+      base64: z.string().optional().describe('PNG の Base64（data URI 可）。画像と埋め込まれたキーが会話に載りモデルの提供元へ渡るので、path が使えないときだけ'),
       outPath: z.string().optional().describe('文字のチャンクを抜いたコピーの書き出し先（絶対パス・任意）'),
       overwrite: z.boolean().optional().describe('outPath に既存ファイルがあるとき上書きするか（既定 false）'),
-      includeUrl: z.boolean().optional().describe('お知らせ文に確認に使ったページの URL を添えるか（既定 true）'),
+      includeUrl: z.boolean().optional().describe('お知らせ文に、同じ点検ができるページ（tools.first-ch.com）の URL を添えるか（既定 true）'),
       lang: z.enum(['ja', 'en']).optional().describe("文言の言語（既定 'ja'）"),
     },
   },
