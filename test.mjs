@@ -90,6 +90,7 @@ import { faqJsonldTool, build as faqBuild, parseBulk as faqParseBulk, parseAnswe
 import { wikiDocLintTool, lintDocs as wdlLint, WikiDocLintError } from './wiki-doc-lint.mjs';
 import { fitToBoxTool, fitAddress as fbFitAddress, daiji as fbDaiji, splitAddress as fbSplit, unitsOf as fbUnits, PAD as FB_PAD, GAP as FB_GAP, FitToBoxError } from './fit-to-box.mjs';
 import { invoiceNebikiTool, InvoiceNebikiError, judge as nbJudge } from './invoice-nebiki.mjs';
+import { replyCheckTool, samples as rcSamples, ReplyCheckError, REPLY_CHECK_MAX_CHARS } from './reply-check.mjs';
 import { linesProcessTool, processLines, PRESETS as LINES_PRESETS, LinesToolError } from './lines.mjs';
 import {
   dpiCalcTool, dpiCalc, dpiReverse, dpiFor, dpiGrade, dpiTable, dpNum, fmt as dpFmt, bytes as dpBytes,
@@ -5147,6 +5148,73 @@ components:
   assert.throws(() => invoiceNebikiTool({ method: 'general', today: '2026-13-45' }), (e) => e.code === 'INVALID_TODAY');
   assert.throws(() => invoiceNebikiTool({ method: 'general', today: '2026-02-29' }), (e) => e.code === 'INVALID_TODAY');
   console.log('invoice_nebiki_check ok');
+}
+
+// ==================== reply_check ====================
+{
+  const T0 = '2026-11-04';   // 水曜
+  const rc = (received, reply, facts = '', extra = {}) => replyCheckTool({ received, reply, facts, today: T0, ...extra });
+  const reds = (r) => r.items.filter((i) => i.status === 'red').map((i) => i.text);
+  const yellows = (r) => r.items.filter((i) => i.status === 'yellow').map((i) => i.text);
+  // 見本（サイトの公開条件と同じ）: 今日の日付を400日ずらしても赤の見落としが0件
+  for (let k = 0; k < 400; k++) {
+    const d = new Date(2026, 0, 1 + 3 * k);
+    const today = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    for (const [key, s] of Object.entries(rcSamples(d))) {
+      const r = replyCheckTool({ received: s.received, reply: s.reply, facts: s.facts, today });
+      assert.deepEqual(reds(r), s.expectRed, `${key} @ ${today}`);
+      if (s.expectYellow) assert.deepEqual(yellows(r), s.expectYellow, `${key} yellow`);
+    }
+  }
+  // 曜日の食い違いは理由と実際の曜日つき・存在しない日付も赤
+  const wd = rc('11月8日に伺います', '11月8日（金）にお待ちしております');
+  assert.deepEqual(reds(wd), ['11月8日（金）']);
+  assert.deepEqual(wd.items[0].reasons, ['weekday']);
+  assert.deepEqual(wd.items[0].date, { date: '2026-11-08', writtenWeekday: 'Friday', actualWeekday: 'Sunday' });
+  assert.match(wd.items[0].message, /2026年11月8日は日曜日/);
+  assert.match(rc('11月8日に伺います', '11月8日（金）', '', { lang: 'en' }).items[0].message, /is a Sunday, not Friday/);
+  assert.deepEqual(rc('', '11月31日にお送りします').items[0].reasons, ['missing', 'nodate']);
+  // 年の無い日付は today で年を決める（2027-11-08 は月曜）
+  assert.deepEqual(reds(replyCheckTool({ received: '11月8日', reply: '11月8日（月）', today: '2027-10-01' })), []);
+  // 全角・表記の違いは照合のときだけそろえ、位置・行・桁は元の本文のまま
+  const reply = '山田様\n０９０－１２３４－５６７８ に、１８時に。ＸＸ';
+  const zr = rc('山田です 090-1234-5678 18:00', reply);
+  for (const it of zr.items) {
+    assert.equal(reply.slice(it.start, it.end), it.text);
+    const lines = reply.split('\n');
+    assert.equal(lines[it.line - 1].slice(it.column - 1, it.column - 1 + it.text.length), it.text);
+  }
+  assert.deepEqual([zr.count.red, zr.count.yellow, zr.count.green], [0, 1, 3]);
+  const phone = zr.items.find((i) => i.type === 'phone');
+  assert.deepEqual(phone.hits, [{ source: 'received', start: 5, end: 18, text: '090-1234-5678' }]);
+  assert.equal(phone.hitCount, 1);
+  // 事実欄も照合先・hits の source で分かる
+  const fx = rc('予約したいです', '営業は17時からで、コースは5,500円です', '営業時間 17:00〜23:00\nコース 5,500円');
+  assert.deepEqual(reds(fx), []);
+  assert.ok(fx.items.every((i) => i.hits.every((h) => h.source === 'facts')));
+  // includeGreen:false は緑を返さないが count は全件
+  const ng = rc('2名', '2名様と3名様', '', { includeGreen: false });
+  assert.deepEqual(ng.items.map((i) => i.text), ['3名様']);
+  assert.deepEqual(ng.count, { red: 1, yellow: 0, green: 1 });
+  // 返す項目・一致箇所の上限（count は切る前の全件）
+  const big = rc('2名 田中 '.repeat(400), '2名様 田中様 鈴木様 '.repeat(400));
+  assert.equal(big.count.red + big.count.green, 1200);
+  assert.equal(big.items.length, 500);
+  assert.equal(big.truncated, true);
+  assert.ok(big.items.every((i) => i.hits.length <= 5 && i.hitCount <= 20));
+  assert.equal(rc('2名', '2名様').truncated, false);
+  // 注意書きは常に付く
+  assert.match(rc('', 'こんにちは').note, /赤が0件でも内容の正しさは保証しません/);
+  assert.match(rc('', 'hello', '', { lang: 'en' }).note, /0 red does not mean/);
+  // 入力の誤り
+  assert.throws(() => replyCheckTool({ received: 'a' }), (e) => e instanceof ReplyCheckError && e.code === 'REPLY_REQUIRED');
+  assert.throws(() => replyCheckTool({ reply: '  \n' }), (e) => e.code === 'REPLY_REQUIRED');
+  assert.throws(() => replyCheckTool({ reply: 'a'.repeat(REPLY_CHECK_MAX_CHARS + 1) }), (e) => e.code === 'TOO_LONG');
+  assert.throws(() => replyCheckTool({ reply: 'a', facts: 'b'.repeat(REPLY_CHECK_MAX_CHARS + 1) }), (e) => e.code === 'TOO_LONG');
+  assert.throws(() => replyCheckTool({ reply: 'a', received: 123 }), (e) => e.code === 'INVALID_INPUT');
+  assert.throws(() => replyCheckTool({ reply: 'a', today: '2026-02-29' }), (e) => e.code === 'INVALID_TODAY');
+  assert.throws(() => replyCheckTool({ reply: 'a', today: 'tomorrow' }), (e) => e.code === 'INVALID_TODAY');
+  console.log('reply_check ok');
 }
 
 console.log('all tests passed');

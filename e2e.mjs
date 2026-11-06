@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 44 local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
+// returns all 45 local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
 // API via FIRSTCH_APPS_BASE_URL, never to the network), and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
 // color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert / slug_generate / htpasswd_generate / openapi_doc_generate /
-// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate / wiki_doc_lint / fit_to_box / invoice_nebiki_check) and returns the expected values — this catches
+// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate / wiki_doc_lint / fit_to_box / invoice_nebiki_check / reply_check) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -117,6 +117,7 @@ try {
     'openapi_doc_generate',
     'px_rem_convert',
     'qr_generate',
+    'reply_check',
     'robotstxt_generate',
     'serp_check',
     'slug_generate',
@@ -915,6 +916,13 @@ try {
   assert.match(nbAsk.message, /2027/);
   const nbErr = await request('tools/call', { name: 'invoice_nebiki_check', arguments: { method: 'sanwari' } }, 187);
   assert.ok(nbErr.result?.isError, `invoice_nebiki_check should require party: ${JSON.stringify(nbErr)}`);
+
+  // reply_check: 原文に無い項目は赤・消し忘れは黄・本文は書き換えない・壊れた引数
+  const rcRes = await callTool('reply_check', { received: '11月8日の18時30分に2名で', reply: '佐藤様\n11月8日（金）18:30より3名様で承りました。[お店の名前]', today: '2026-11-04' }, 188);
+  assert.deepEqual(rcRes.items?.filter((i) => i.status === 'red').map((i) => i.text), ['佐藤様', '11月8日（金）', '3名様'], `reply_check reds mismatch: ${JSON.stringify(rcRes)}`);
+  assert.deepEqual(rcRes.count, { red: 3, yellow: 1, green: 1 });
+  const rcErr = await request('tools/call', { name: 'reply_check', arguments: { received: 'x', reply: '' } }, 189);
+  assert.ok(rcErr.result?.isError, `reply_check should require reply: ${JSON.stringify(rcErr)}`);
 
   // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
   const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);
