@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 46 local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
+// returns all 47 local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
 // API via FIRSTCH_APPS_BASE_URL, never to the network), and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
 // color_convert / hash_generate / jwt_decode / user_agent_parse / uuid_generate / aspect_ratio_calc / markdown_table / sql_format / qr_generate / unixtime_convert / robotstxt_generate / case_convert / csv_convert / zenkaku_convert / cidr_calc / date_calc / html_to_markdown / wareki_convert / slug_generate / htpasswd_generate / openapi_doc_generate /
-// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate / wiki_doc_lint / fit_to_box / invoice_nebiki_check / reply_check / comfy_png_leak_scan) and returns the expected values — this catches
+// faq_jsonld_generate / lines_process / dpi_calc / serp_check / css_layout_generate / wiki_doc_lint / fit_to_box / invoice_nebiki_check / reply_check / comfy_png_leak_scan / ai_vs_search) and returns the expected values — this catches
 // regressions where a handler throws but the tool is still listed correctly.
 // Exits non-zero on any failure.
 import { spawn } from 'node:child_process';
@@ -86,6 +86,7 @@ try {
   const listRes = await request('tools/list', {}, 2);
   const names = (listRes.result?.tools || []).map((t) => t.name).sort();
   const expected = [
+    'ai_vs_search',
     'aspect_ratio_calc',
     'base64_encode',
     'case_convert',
@@ -934,6 +935,16 @@ try {
   assert.match(ck.notice, /有効かどうかと、書き込まれた原因は確認していません/);
   const ckErr = await request('tools/call', { name: 'comfy_png_leak_scan', arguments: { path: 'relative.png' } }, 191);
   assert.ok(ckErr.result?.isError, `comfy_png_leak_scan should require an absolute path: ${JSON.stringify(ckErr)}`);
+
+  // ai_vs_search: 見本の CSV（架空の数値）で、総計と一致・倍率・要約が返る。相対パスはエラー
+  const { makeSampleCsv: avSample } = await import('./ai-vs-search.mjs');
+  const av = await callTool('ai_vs_search', { csv: avSample('ja') }, 192);
+  assert.equal(av.totals?.basis, 'matched', `ai_vs_search basis: ${JSON.stringify(av)}`);
+  assert.equal(av.groups.ai.sessions, 214);
+  assert.ok(av.ratios.avgEngagementTime > 1.9 && av.ratios.avgEngagementTime < 1.93);
+  assert.match(av.summary, /AI Assistant: 214 セッション/);
+  const avErr = await request('tools/call', { name: 'ai_vs_search', arguments: { path: 'relative.csv' } }, 193);
+  assert.ok(avErr.result?.isError, `ai_vs_search should require an absolute path: ${JSON.stringify(avErr)}`);
 
   // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
   const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);

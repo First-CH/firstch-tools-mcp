@@ -8,6 +8,7 @@ The server provides tools for, among others:
 
 - **Web and accessibility checks** — WCAG 2.1 contrast ratio, px ⇄ rem/em conversion, HEX/RGB/HSL/OKLCH colour conversion, aspect-ratio sizing, Flexbox / CSS Grid CSS generation
 - **SEO and AI-crawler files** — schema.org JSON-LD, `llms.txt`, `robots.txt` with AI-crawler presets, URL parameter editing, URL slugs from Japanese titles, FAQ structured data (FAQPage JSON-LD + Markdown), title/meta-description pixel-width checks for search results
+- **Visitors from AI vs from search** — from a GA4 Traffic acquisition CSV, engagement rate, average engagement time and key event rate for the AI Assistant and Organic Search channels side by side, checked against the grand total row
 - **Japanese text** — character and X (Twitter) post-weight counting, full-width ⇄ half-width conversion, Japanese era ⇄ Western date conversion, character size and line breaks that fit a long address into a printed box (e.g. gift envelopes, with kanji and formal numerals), encoding and line-ending detection/conversion (UTF-8 / Shift_JIS)
 - **Images and documents** — PNG/JPEG → WebP conversion, Marp Markdown → slides (HTML, optional PDF), QR codes, HTML → Markdown, print size ⇄ pixels / DPI, OpenAPI → Markdown reference and TypeScript types
 - **Freelance pricing (Japan)** — whether a client actually loses any input tax credit, period by period, when they ask a non-registered freelancer for a price cut under the qualified invoice system, plus a message that asks only the open points

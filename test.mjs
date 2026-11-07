@@ -5280,3 +5280,32 @@ components:
 }
 
 console.log('all tests passed');
+
+// ==================== ai_vs_search ====================
+{
+  const { aiVsSearchTool, AiVsSearchError, makeSampleCsv: avSample } = await import('./ai-vs-search.mjs');
+  const { mkdtemp, writeFile: avWrite } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join: avJoin } = await import('node:path');
+  // 見本（架空の数値）: 総計と一致し、倍率と要約が返る
+  const s = await aiVsSearchTool({ csv: avSample('ja') });
+  assert.equal(s.totals.basis, 'matched');
+  assert.equal(s.groups.ai.sessions, 214); assert.equal(s.groups.search.sessions, 2948); assert.equal(s.groups.other.sessions, 2965);
+  assert.ok(s.ratios.keyEventRate > 2.7 && s.ratios.keyEventRate < 2.75);
+  assert.match(s.summary, /^GA4 トラフィック獲得 2026\/10\/01〜2026\/10\/31/);
+  // 英語の CSV をファイルで: AI が30未満なら倍率なし・5月13日前の注記・不正な行の行番号
+  const dir = await mkdtemp(avJoin(tmpdir(), 'av-'));
+  const csv = '# Start date: 20260401\n# End date: 20260630\nSession default channel group,Sessions,Engaged sessions,Average engagement time per session,Key events\n'
+    + 'Grand total,1200,700,45,30\nOrganic Search,700,420,40,14\n"AI Assistant",25,20,90,2\nDirect,475,260,50,14\nReferral,x,1,1,1\n';
+  const file = avJoin(dir, 'ga4.csv'); await avWrite(file, csv);
+  const e = await aiVsSearchTool({ path: file, lang: 'en' });
+  assert.equal(e.lowSample, true); assert.equal(e.ratios.engagementRate, null);
+  assert.ok(e.notes.includes('beforeAiChannel'));
+  assert.deepEqual(e.excludedTexts, [{ line: 8, reason: 'a value is not a number' }]);
+  assert.equal(e.totals.basis, 'read'); assert.equal(e.labels.basis, 'Total of the rows that could be read');
+  // 入力の誤り
+  await assert.rejects(aiVsSearchTool({ path: 'relative.csv' }), (err) => err instanceof AiVsSearchError && err.code === 'PATH_NOT_ABSOLUTE');
+  await assert.rejects(aiVsSearchTool({}), (err) => err.code === 'NO_INPUT');
+  await assert.rejects(aiVsSearchTool({ csv: 'a,b\n1,2\n' }), (err) => err.code === 'NO_HEADER');
+  console.log('ai_vs_search ok');
+}
