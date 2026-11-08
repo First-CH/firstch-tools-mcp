@@ -509,6 +509,15 @@ const DEFS = [
       lang: LANG,
     },
   },
+  urlApp(
+    'notice-check',
+    '/notice-check/api/check',
+    '公開直後のダミーテキスト・消し忘れチェック',
+    '公開URLのトップと、トップのナビにある同じサイトのページを最大6本（各512KB・全体12秒まで）取得し、消し忘れ候補を6種類で返す: 日本語ダミー文の定型句（ここにテキストが入ります 等）・仮の値（〇〇・【会社名】・000-0000-0000）・lorem ipsum・WordPress の初期状態（Hello world!・サンプルページ・Just another WordPress site）・デモ／placehold 系の画像・localhost や staging などテスト環境へのリンク。' +
+      'ページごとに状態（checked＝検査済み / unreadable＝JavaScript で描くページ等で本文を読めず未検査 / failed＝取得不能 / limit＝12秒の上限で打ち切り）と、一致した語句・前後の短い抜粋・直近の見出しを返す。未検査のページは checked の数に入れない。' +
+      '「例：」「記入例」直後の例示と script・style の中は数えない。法定表記の判定・点数化・修正案はしない。同じIPから10分に10回まで。',
+    { slow: true, urlLabel: '調べる公開URL（サイトのトップページ）' },
+  ),
 ];
 
 const toolName = (slug) => `app_${slug.replace(/-/g, '_')}`;
