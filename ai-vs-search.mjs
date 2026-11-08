@@ -235,6 +235,8 @@ export const T = {
       aiZero: 'AI Assistant の行がありません（この期間の AI からの訪問が0か、表の行数を減らして書き出したかもしれません）。',
       lowSample: 'AI Assistant が30セッション未満のため、倍率は出さず、数は参考値です。',
       searchZero: 'Organic Search の行がないため、倍率は出していません。',
+      noMetrics: '比べられる指標がないため、倍率は出していません（エンゲージのあったセッション数・平均エンゲージメント時間・キーイベントの列がないか、検索側の値が0です）。',
+      keyEventRate: 'キーイベント率＝キーイベント÷セッション（100%を超えることがあります）。GA4 の「セッションのキーイベント率」とは別の数です。',
       duplicate: '同じチャネルが2行以上あります。比較やセカンダリ ディメンションを付けたまま書き出していないか確かめてください（各行はそのまま足しています）。',
       noEngaged: '「エンゲージのあったセッション数」の列がないため、エンゲージメント率は出していません。',
       noAvgTime: '「セッションあたりの平均エンゲージメント時間」の列がないため、平均エンゲージメント時間は出していません。',
@@ -266,6 +268,8 @@ export const T = {
       aiZero: 'There is no AI Assistant row (no AI visits in this period, or the table was exported with fewer rows).',
       lowSample: 'AI Assistant has fewer than 30 sessions, so no ratios are shown and the numbers are for reference only.',
       searchZero: 'There is no Organic Search row, so no ratios are shown.',
+      noMetrics: 'There is no metric to compare, so no ratios are shown (the Engaged sessions, Average engagement time and Key events columns are missing, or the search value is 0).',
+      keyEventRate: 'Key event rate = key events ÷ sessions (it can exceed 100%). It is not GA4’s “Session key event rate”.',
       duplicate: 'The same channel appears on more than one row. Check that no comparison or secondary dimension was on when you exported (each row was added as is).',
       noEngaged: 'There is no Engaged sessions column, so engagement rate is not shown.',
       noAvgTime: 'There is no Average engagement time per session column, so engagement time is not shown.',
@@ -296,6 +300,15 @@ export function fmtMetric(k, v, lang) { return k === 'avgEngagementTime' ? fmtTi
 
 export const METRIC_KEYS = ['engagementRate', 'avgEngagementTime', 'keyEventRate'];
 
+/** 倍率が1つも出ないときの理由（倍率があるときは null）。検索の行があっても、比べられる列が無ければ noMetrics */
+export function noRatioReason(r) {
+  if (METRIC_KEYS.some((k) => r.ratios[k] != null)) return null;
+  if (r.aiZero) return 'aiZero';
+  if (r.lowSample) return 'lowSample';
+  if (!r.groups.search.sessions) return 'searchZero';
+  return 'noMetrics';
+}
+
 /** 上司や制作会社へ貼る要約（プレーンテキスト） */
 export function summaryText(r, lang = 'ja', url = 'https://tools.first-ch.com/ai-vs-search/') {
   const L = T[lang === 'en' ? 'en' : 'ja'];
@@ -306,10 +319,11 @@ export function summaryText(r, lang = 'ja', url = 'https://tools.first-ch.com/ai
     lines.push(head + ' / ' + METRIC_KEYS.map((k) => L.metrics[k] + ' ' + fmtMetric(k, m[k], lang)).join(' / '));
   }
   const rs = METRIC_KEYS.filter((k) => r.ratios[k] != null).map((k) => L.ratioLine(L.metrics[k], r.ratios[k]));
-  lines.push(rs.length ? (lang === 'en' ? 'AI vs search: ' : 'AI と検索の比: ') + rs.join(lang === 'en' ? ', ' : '・') : L.noRatio + '（' + (r.aiZero ? L.notes.aiZero : r.lowSample ? L.notes.lowSample : L.notes.searchZero) + '）');
+  lines.push(rs.length ? (lang === 'en' ? 'AI vs search: ' : 'AI と検索の比: ') + rs.join(lang === 'en' ? ', ' : '・') : L.noRatio + (lang === 'en' ? ' (' : '（') + L.notes[noRatioReason(r)] + (lang === 'en' ? ')' : '）'));
   if (r.totals.basis !== 'matched') lines.push(L.basis[r.totals.basis] + ': ' + L.sessions(r.totals.read.sessions));
   if (r.excluded.length) lines.push(L.excluded(r.excluded.map((e) => e.line)));
   for (const n of r.notes) if (['periodUnknown', 'allBeforeAiChannel', 'beforeAiChannel', 'duplicate'].includes(n)) lines.push('※' + L.notes[n]);
+  if (r.groups.ai.keyEventRate != null || r.groups.search.keyEventRate != null) lines.push('※' + L.notes.keyEventRate);
   lines.push('※' + L.fineLong);
   if (url) lines.push(url);
   return lines.join('\n');
@@ -357,6 +371,7 @@ export async function aiVsSearchTool(opts = {}) {
   return {
     ...r,
     labels: { groups: L.groups, metrics: L.metrics, basis: L.basis[r.totals.basis] },
+    noRatioReason: noRatioReason(r),
     noteTexts: r.notes.map((n) => L.notes[n]),
     excludedTexts: r.excluded.map((e) => ({ line: e.line, reason: L.reason[e.reason] })),
     caveat: L.fineLong,

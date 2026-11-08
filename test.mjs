@@ -5279,7 +5279,6 @@ components:
   console.log('comfy_png_leak_scan ok');
 }
 
-console.log('all tests passed');
 
 // ==================== ai_vs_search ====================
 {
@@ -5307,5 +5306,11 @@ console.log('all tests passed');
   await assert.rejects(aiVsSearchTool({ path: 'relative.csv' }), (err) => err instanceof AiVsSearchError && err.code === 'PATH_NOT_ABSOLUTE');
   await assert.rejects(aiVsSearchTool({}), (err) => err.code === 'NO_INPUT');
   await assert.rejects(aiVsSearchTool({ csv: 'a,b\n1,2\n' }), (err) => err.code === 'NO_HEADER');
+  // 検索の行があり列が足りないときは「Organic Search の行がない」と書かない（2026-11-09）
+  const few = await aiVsSearchTool({ csv: 'セッションのデフォルト チャネル グループ,セッション\nOrganic Search,1000\nAI Assistant,300\n' });
+  assert.equal(few.noRatioReason, 'noMetrics');
+  assert.ok(!few.summary.includes('Organic Search の行がない'), few.summary);
   console.log('ai_vs_search ok');
 }
+
+console.log('all tests passed');
