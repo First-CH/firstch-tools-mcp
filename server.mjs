@@ -2102,7 +2102,7 @@ registerTool(
       '指標はエンゲージメント率（エンゲージのあったセッション÷セッション）・セッションあたりの平均エンゲージメント時間（合わせるときはセッションで重み付け）・キーイベント率（キーイベント÷セッション。GA4 の「セッションのキーイベント率」とは別）。列名は日本語・英語（旧名・コンバージョンも）を読む。' +
       'ratios は AI ÷ 検索で、AI Assistant が30セッション未満なら null（lowSample）。総計行は足さず、明細の合計との突き合わせ（totals.basis: matched / read / noTotal）にだけ使い、除外した行は excluded に行番号で返す。' +
       '期間（CSV 先頭の開始日・終了日）が2026-05-13（AI Assistant チャネルの追加日）より前を含めば notes に beforeAiChannel / allBeforeAiChannel。summary は上司や制作会社へ貼る要約。' +
-      '外部の調査値・独自の AI サービスの一覧・GA4 API は使わない。参照元を渡さない AI 訪問（Direct 等）と AI Overviews・AI モード（Organic Search に入る）は区別できない。完全ローカル処理・ネットワーク送信なし。',
+      '外部の調査値・独自の AI サービスの一覧・GA4 API は使わない。参照元を渡さない AI 訪問（Direct 等）や AI Overviews・AI モード（Organic Search に入る）は AI Assistant に数えられず、ほかの訪問と区別できない。完全ローカル処理・ネットワーク送信なし。',
     inputSchema: {
       csv: z.string().optional().describe('CSV の中身（csv か path のどちらか）'),
       path: z.string().optional().describe('CSV ファイルの絶対パス'),

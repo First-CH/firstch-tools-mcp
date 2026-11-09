@@ -242,9 +242,9 @@ export const T = {
       noAvgTime: '「セッションあたりの平均エンゲージメント時間」の列がないため、平均エンゲージメント時間は出していません。',
       noKeyEvents: '「キーイベント」の列がないため、キーイベント率は出していません。',
     },
-    fine: ['このCSV内の数値', '参照元が渡らないAI訪問とAI Overviewsは区別できない'],
+    fine: ['このCSV内の数値', '参照元が渡らないAI経由の訪問や、AI Overviews経由の訪問は、AI Assistantとして区別できない'],
     cardNote: { allBeforeAiChannel: 'AI Assistant は2026年5月13日から分類。この期間の AI からの訪問は Referral などに入っています', beforeAiChannel: 'AI Assistant は2026年5月13日から分類。それより前の AI からの訪問は Referral などに入っている可能性があります', periodUnknown: '期間不明。AI Assistant は2026年5月13日から分類されています' },
-    fineLong: 'このCSV内の数値です。参照元が渡らない AI からの訪問（Direct などに入る）と、Google 検索の AI による概要（AI Overviews）・AI モードからの訪問（Organic Search に入る）は区別できません。',
+    fineLong: 'このCSV内の数値です。参照元が渡らない AI からの訪問（Direct などに入る）や、Google 検索の AI による概要（AI Overviews）・AI モードからの訪問（Organic Search に入る）は、AI Assistant として数えられず、ほかの訪問と区別できません。',
     head: 'GA4 トラフィック獲得',
   },
   en: {
@@ -275,9 +275,9 @@ export const T = {
       noAvgTime: 'There is no Average engagement time per session column, so engagement time is not shown.',
       noKeyEvents: 'There is no Key events column, so key event rate is not shown.',
     },
-    fine: ['Numbers from this CSV only', 'AI visits without a referrer and AI Overviews cannot be told apart'],
+    fine: ['Numbers from this CSV only', 'AI visits without a referrer and AI Overviews visits are not counted as AI Assistant'],
     cardNote: { allBeforeAiChannel: 'AI Assistant is classified from May 13, 2026. AI visits in this period are in Referral and other channels', beforeAiChannel: 'AI Assistant is classified from May 13, 2026. Earlier AI visits may be in Referral and other channels', periodUnknown: 'Period unknown. AI Assistant is classified from May 13, 2026' },
-    fineLong: 'Numbers from this CSV only. AI visits that pass no referrer (they land in Direct and others) and visits from Google’s AI Overviews and AI Mode (they land in Organic Search) cannot be told apart.',
+    fineLong: 'Numbers from this CSV only. AI visits that pass no referrer (they land in Direct and others) and visits from Google’s AI Overviews and AI Mode (they land in Organic Search) are not counted as AI Assistant, so they cannot be separated from other visits.',
     head: 'GA4 Traffic acquisition',
   },
 };
