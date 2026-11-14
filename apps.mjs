@@ -527,6 +527,30 @@ const DEFS = [
       '先頭は候補件数・確認した範囲（KB と打ち切りの有無）・次にすることの3段。日本語のページ向け。機械的な抽出のため、記録として残す告知も候補に出る。ページの原文は返さない。同じIPから10分に20回まで。',
     { urlLabel: '確認するページのURL' },
   ),
+  {
+    slug: 'mibare-check',
+    apiPath: '/mibare-check/api/check',
+    title: '最寄り駅を隠す毎日1問（架空の人の投稿を2か所だけ直す）',
+    summary:
+      '日本時間の日付ごとに全員共通の1問（架空の町の8駅と、架空の人の何気ない投稿8件 c1〜c8）について、言い換える投稿を2件まで選ぶと、残る候補駅の数と駅の番号を返す。' +
+      'final を true にすると答え合わせも返す: 最も効いた2件の組み合わせ（手がかりID と見出し）・それぞれ単独で当てはまる駅の数・2件が重なって1駅になる経緯・各投稿の単独の駅数・2か所の選び方28通りのうち直しても1駅のまま残る割合・共有用の文。' +
+      '投稿の文はページ（apps.first-ch.com/mibare-check/）にだけあり、この API は文を返さない。実在の人・地名は扱わず、利用者の投稿文やURLは受け取らない。同じIPから10分に240回まで。',
+    sends: '問題の日付と選んだ投稿の番号',
+    inputSchema: {
+      day: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .optional()
+        .describe('問題の日付（YYYY-MM-DD・日本時間の今日か前日。省略時は今日）'),
+      picks: z
+        .array(z.enum(['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8']))
+        .max(2)
+        .optional()
+        .describe('言い換える投稿の手がかりID（c1〜c8・重複なしで2件まで。省略時は0件）'),
+      final: z.boolean().optional().describe('true なら答え合わせ（result）も返す。既定 false'),
+      lang: LANG,
+    },
+  },
 ];
 
 const toolName = (slug) => `app_${slug.replace(/-/g, '_')}`;

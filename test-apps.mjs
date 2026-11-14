@@ -107,6 +107,12 @@ const jsonRes = (obj, status = 200, headers = {}) =>
   assert.ok(parse('app_hp_sumaho_check', { url: 'https://example.com/', lang: 'ja' }).success);
   assert.ok(!parse('app_hp_sumaho_check', { lang: 'ja' }).success, 'url は必須');
   assert.ok(!parse('app_hp_sumaho_check', { url: 'https://example.com/' + 'a'.repeat(2048) }).success, 'URL は2,048字まで');
+  assert.ok(parse('app_mibare_check', {}).success, '日付も選択も省ける（今日の問題・0件）');
+  assert.ok(parse('app_mibare_check', { day: '2026-11-15', picks: ['c1', 'c8'], final: true, lang: 'en' }).success);
+  assert.ok(!parse('app_mibare_check', { picks: ['c1', 'c2', 'c3'] }).success, '言い換えは2件まで');
+  assert.ok(!parse('app_mibare_check', { picks: ['c9'] }).success, '手がかりIDは c1〜c8');
+  assert.ok(!parse('app_mibare_check', { day: '11/15' }).success, '日付は YYYY-MM-DD');
+  assert.ok(!parse('app_mibare_check', { final: 'yes' }).success, 'final は真偽');
   assert.ok(parse('app_notice_check', { url: 'https://example.com/', lang: 'en' }).success);
   assert.ok(!parse('app_notice_check', { lang: 'ja' }).success, 'url は必須');
   assert.ok(!parse('app_notice_check', { url: 'https://example.com/' + 'a'.repeat(2048) }).success, 'URL は2,048字まで');
