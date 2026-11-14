@@ -5313,4 +5313,35 @@ components:
   console.log('ai_vs_search ok');
 }
 
+// ==================== email_read_aloud ====================
+{
+  const { emailReadAloudTool, EmailReadAloudError, countMora } = await import('./email-read-aloud.mjs');
+  assert.equal(countMora('ダブリュー'), 4);
+  const r = emailReadAloudTool({ candidates: ['sakura_hana2026@example.co.jp', 'hello@example.jp', 'a@b.com'] });
+  assert.equal(r.unit, 'mora');
+  assert.deepEqual(r.items.map((x) => [x.label, x.units]), [['C', 15], ['B', 40], ['A', 72]]);
+  assert.equal(r.items[0].reading, 'エー　アットマーク　ビー　ドット　コム');
+  assert.deepEqual(r.items[2].facts.symbols, { hyphen: 0, underscore: 1, dot: 2, plus: 0 });
+  assert.equal(r.items[2].facts.digits, 4);
+  assert.equal(r.items[2].facts.switches, 2);
+  assert.deepEqual(r.items[1].chars[0].phonetic, { word: 'Hotel', pron: 'HOHTELL', kana: 'ホテル' });
+  assert.equal(r.items[2].chars.find((c) => c.ch === '2').phonetic.word, '数字のに');
+  assert.ok(!r.card.includes('hello'));
+  for (const x of r.items) for (const k of ['rank', 'score', 'recommend']) assert.ok(!(k in x));
+  // 英語・文字列の入力・表を省く・6件目以降
+  const e = emailReadAloudTool({ candidates: 'w@x.net\nb@c.jp\nd@e.jp\nf@g.jp\nh@i.jp\nj@k.jp', lang: 'en', includeChars: false });
+  assert.equal(e.dropped, 1);
+  assert.equal(e.items.length, 5);
+  assert.equal(e.items.find((x) => x.label === 'A').reading, 'W, at, X, dot, net');
+  assert.equal(e.items.find((x) => x.label === 'A').units, 7);   // W=3・at・X・dot・net
+  assert.ok(!('chars' in e.items[0]));
+  // 読めない候補と入力の誤り
+  const bad = emailReadAloudTool({ candidates: ['a@b@c.jp', 'ok@x.jp'] });
+  assert.equal(bad.items[1].ok, false);
+  assert.equal(bad.items[1].error.code, 'MULTI_AT');
+  assert.throws(() => emailReadAloudTool({ candidates: [] }), (err) => err instanceof EmailReadAloudError && err.code === 'NO_INPUT');
+  assert.throws(() => emailReadAloudTool({}), (err) => err.code === 'NO_INPUT');
+  console.log('email_read_aloud ok');
+}
+
 console.log('all tests passed');

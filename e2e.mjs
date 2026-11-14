@@ -101,6 +101,7 @@ try {
     'date_calc',
     'diff_check',
     'dpi_calc',
+    'email_read_aloud',
     'encoding_convert',
     'faq_jsonld_generate',
     'fit_to_box',
@@ -945,6 +946,13 @@ try {
   assert.match(av.summary, /AI Assistant: 214 セッション/);
   const avErr = await request('tools/call', { name: 'ai_vs_search', arguments: { path: 'relative.csv' } }, 193);
   assert.ok(avErr.result?.isError, `ai_vs_search should require an absolute path: ${JSON.stringify(avErr)}`);
+
+  // email_read_aloud: 拍の短い順・伏せ字のカード・読めない候補は ok:false
+  const er = await callTool('email_read_aloud', { candidates: ['hanaya.sakura@example.com', 'hello@example.jp', 'a b'] }, 194);
+  assert.deepEqual(er.items.map((x) => x.label), ['B', 'A', 'C'], `email_read_aloud order: ${JSON.stringify(er.items)}`);
+  assert.equal(er.items[0].units, 40);
+  assert.equal(er.items[2].error.code, 'BAD_CHAR');
+  assert.equal(er.card, '候補B（h••••@e••••••.j•）40拍・記号1／候補A（h•••••.s•••••@e••••••.c••）56拍・記号2');
 
   // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
   const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);

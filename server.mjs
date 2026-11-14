@@ -50,6 +50,7 @@ import { fitToBoxTool } from './fit-to-box.mjs';
 import { invoiceNebikiTool } from './invoice-nebiki.mjs';
 import { comfyPngLeakTool } from './comfy-png-leak.mjs';
 import { aiVsSearchTool } from './ai-vs-search.mjs';
+import { emailReadAloudTool } from './email-read-aloud.mjs';
 import { replyCheckTool } from './reply-check.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
@@ -2112,6 +2113,30 @@ registerTool(
   async (opts) => {
     await logUsage('ai_vs_search');
     return asText(await aiVsSearchTool(opts));
+  },
+);
+
+registerTool(
+  'email_read_aloud',
+  {
+    title: 'メールアドレス候補の読み上げの長さ比べ',
+    description:
+      'メールアドレスかドメインの候補（candidates・最大5件。6件目以降は dropped に件数）ごとに、電話で言うときの読み上げ文と長さを返す（tools.first-ch.com/mail-yomiage/ と同一ロジック）。' +
+      '入力は NFKC で半角に・小文字にそろえ、前後の空白と mailto: を外す。英字・数字は1字ずつ（ja はカタカナ・en は英語の文字名）、@=アットマーク/at・.=ドット/dot・-=ハイフン/hyphen・_=アンダーバー/underscore・+=プラス/plus と読み、末尾が .com・.net のときだけ語で読む。' +
+      'units は ja ならカタカナの拍（小書きのャュョァィゥェォは前の字と1拍・ッ・ン・ーは1拍）、en なら音節。items は units の短い順（同じなら入力順）で、label（A〜E）は入力順。順位・おすすめではない。' +
+      'facts は length（文字数）・symbols（hyphen / underscore / dot / plus の数。@ は数えない）・symbolCount・repeats（同じ文字が2つ以上続く箇所）・digits（数字の桁数）・switches（英字と数字の切り替わり回数・記号は飛ばす）。' +
+      'chars（includeChars:false で省く）は1文字ずつの reading・units・phonetic（無線局運用規則 別表第五号の欧文通話表の語と発音〔ITU と同じ語〕。数字は ja が国内通信の「数字のまる」等、en が航空移動業務の ZERO/WUN 等）・alt（日本語の言い換え例。決まった表ではない）。' +
+      '読めない候補は ok:false と error.code（BAD_CHAR〔chars に該当文字〕/ MULTI_AT / EMPTY_PART / TOO_LONG〔254文字超〕）。card は比べカードの文（アドレスは伏せ字）。' +
+      '伝わりやすさの順位・見た目の似た文字の判定・ドメインの空き確認・実在確認・音声・候補の生成はしない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      candidates: z.array(z.string()).describe('メールアドレスかドメインの候補（最大5件。改行区切りの1つの文字列でも可）'),
+      lang: z.enum(['ja', 'en']).optional().describe("読み上げ文と長さの言語（既定 'ja'＝カタカナの拍、'en'＝英語の文字名と音節）"),
+      includeChars: z.boolean().optional().describe('1文字ずつの表（chars）を返すか（既定 true）'),
+    },
+  },
+  async (opts) => {
+    await logUsage('email_read_aloud');
+    return asText(emailReadAloudTool(opts));
   },
 );
 
