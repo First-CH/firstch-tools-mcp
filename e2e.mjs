@@ -953,6 +953,9 @@ try {
   assert.equal(er.items[0].units, 40);
   assert.equal(er.items[2].error.code, 'BAD_CHAR');
   assert.equal(er.card, '候補B（h••••@e••••••.j•）40拍・記号1／候補A（h•••••.s•••••@e••••••.c••）56拍・記号2');
+  // 説明どおり、改行区切りの1つの文字列でも MCP のスキーマで弾かれない
+  const erStr = await callTool('email_read_aloud', { candidates: 'hanaya.sakura@example.com\nhello@example.jp' }, 195);
+  assert.deepEqual(erStr.items.map((x) => x.label), ['B', 'A'], `email_read_aloud string input: ${JSON.stringify(erStr)}`);
 
   // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
   const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);

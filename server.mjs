@@ -2129,7 +2129,7 @@ registerTool(
       '読めない候補は ok:false と error.code（BAD_CHAR〔chars に該当文字〕/ MULTI_AT / EMPTY_PART / TOO_LONG〔254文字超〕）。card は比べカードの文（アドレスは伏せ字）。' +
       '伝わりやすさの順位・見た目の似た文字の判定・ドメインの空き確認・実在確認・音声・候補の生成はしない。完全ローカル処理・ネットワーク送信なし。',
     inputSchema: {
-      candidates: z.array(z.string()).describe('メールアドレスかドメインの候補（最大5件。改行区切りの1つの文字列でも可）'),
+      candidates: z.union([z.array(z.string()), z.string()]).describe('メールアドレスかドメインの候補（最大5件。改行区切りの1つの文字列でも可）'),
       lang: z.enum(['ja', 'en']).optional().describe("読み上げ文と長さの言語（既定 'ja'＝カタカナの拍、'en'＝英語の文字名と音節）"),
       includeChars: z.boolean().optional().describe('1文字ずつの表（chars）を返すか（既定 true）'),
     },
