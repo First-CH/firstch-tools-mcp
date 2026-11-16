@@ -51,6 +51,7 @@ import { invoiceNebikiTool } from './invoice-nebiki.mjs';
 import { comfyPngLeakTool } from './comfy-png-leak.mjs';
 import { aiVsSearchTool } from './ai-vs-search.mjs';
 import { emailReadAloudTool } from './email-read-aloud.mjs';
+import { renkyuPairTool } from './renkyu-pair.mjs';
 import { replyCheckTool } from './reply-check.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
@@ -2137,6 +2138,39 @@ registerTool(
   async (opts) => {
     await logUsage('email_read_aloud');
     return asText(emailReadAloudTool(opts));
+  },
+);
+
+const renkyuPerson = z
+  .object({
+    days: z.array(z.number().int().min(0).max(6)).optional().describe('休みの曜日（0=日〜6=土・いくつでも。既定 [0, 6]＝土日）'),
+    holidays: z.boolean().optional().describe('祝日に休むか（既定 true）'),
+    yearEnd: z.boolean().optional().describe('年末年始（12/29〜1/3 のうち年内の日）に休むか（既定 true）'),
+    leave: z.number().int().min(0).max(10).optional().describe('1つの連休で使える有給の日数（0〜10・既定 3）'),
+  })
+  .optional();
+
+registerTool(
+  'renkyu_pair_plan',
+  {
+    title: '休みの曜日が違う2人の2027年のそろって休める日と連休の候補',
+    description:
+      '2人（me と partner）の休みの曜日・祝日と年末年始に休むか・使える有給と、2人の有給の合計の上限 maxTotal から、2027年（1/1〜12/31）に2人そろって休める日数と月ごとの内訳（perMonth・1月から12個）、有給を足して作れる連休の候補を最大3件返す（tools.first-ch.com/renkyu-2027/ と同一ロジック）。' +
+      '祝日は内閣府「国民の祝日について」の令和9年の表どおり（祝日16日＋3/22 の振替休日＝17日）。年末年始は 12/29〜12/31 と 1/1〜1/3。' +
+      '候補は、期間の毎日が「2人とも休み」か「休みでない方の有給」で埋まり、各自の leave と maxTotal の両方を守る期間で、外側の隣は2人そろって休みでない日か年の端。年をまたぐ連休は年の端で切る。' +
+      '並びは日数の長い順→有給の合計の少ない順→2人の有給の差の小さい順→始まりの早い順で、期間が重なる候補は上位の1件だけ残す。各候補は start・end・days・meLeave・partnerLeave（有給を取る日の YYYY-MM-DD）・totalLeave・label。' +
+      'text は共有用の文、url は条件を # 以降に入れたページの URL（開くとブラウザの中で同じ結果を復元する）。' +
+      'シフト制・3人以上・2028年以降・会社独自の休日には対応しない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      me: renkyuPerson.describe('わたしの条件'),
+      partner: renkyuPerson.describe('相手の条件'),
+      maxTotal: z.number().int().min(0).max(20).optional().describe('2人で使う有給の合計の上限（0〜20。省くと2人の leave の和）'),
+      lang: z.enum(['ja', 'en']).optional().describe("text・label・url の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('renkyu_pair_plan');
+    return asText(renkyuPairTool(opts));
   },
 );
 

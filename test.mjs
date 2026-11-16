@@ -5344,4 +5344,35 @@ components:
   console.log('email_read_aloud ok');
 }
 
+// ==================== renkyu_pair_plan ====================
+{
+  const { renkyuPairTool, RenkyuError, planPair, HOLIDAYS, toHash, fromHash } = await import('./renkyu-pair.mjs');
+  assert.equal(HOLIDAYS.length, 17);
+  const d = renkyuPairTool({});
+  assert.equal(d.together, 123);
+  assert.equal(d.perMonth.reduce((a, b) => a + b, 0), 123);
+  assert.deepEqual(d.candidates.map((c) => [c.start, c.end, c.days, c.totalLeave]), [
+    ['2027-04-29', '2027-05-09', 11, 6], ['2027-09-18', '2027-09-26', 9, 6], ['2027-12-24', '2027-12-31', 8, 6],
+  ]);
+  assert.equal(d.candidates[0].label, '4/29(木)〜5/9(日)');
+  assert.equal(d.conditions.maxTotal, 6);
+  // 合計の上限が各自の上限より先に効く・英語
+  const e = renkyuPairTool({ me: { leave: 10 }, partner: { days: [3], leave: 10 }, maxTotal: 4, lang: 'en' });
+  for (const c of e.candidates) assert.ok(c.totalLeave <= 4);
+  assert.ok(e.url.startsWith('https://tools.first-ch.com/en/renkyu-2027/#'));
+  assert.ok(e.text.startsWith('In 2027, we can both be off on '));
+  // 有給0日・年の端
+  const z = renkyuPairTool({ me: { leave: 0 }, partner: { leave: 0 } });
+  assert.equal(z.candidates[0].start, '2027-05-01');
+  assert.equal(z.text, '2027年、2人そろって休めるのは123日。有給なしで5/1〜5/5の5連休');
+  // URL の往復はサイトと同じ形
+  assert.deepEqual(fromHash(toHash(d.conditions)), d.conditions);
+  assert.equal(planPair(d.conditions).together, 123);
+  // 入力の誤り
+  assert.throws(() => renkyuPairTool({ me: { days: [7] } }), (err) => err instanceof RenkyuError && err.code === 'BAD_DAYS');
+  assert.throws(() => renkyuPairTool({ me: { leave: 11 } }), (err) => err.code === 'BAD_LEAVE');
+  assert.throws(() => renkyuPairTool({ maxTotal: 21 }), (err) => err.code === 'BAD_TOTAL');
+  console.log('renkyu_pair_plan ok');
+}
+
 console.log('all tests passed');

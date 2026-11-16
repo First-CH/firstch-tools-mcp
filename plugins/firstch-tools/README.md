@@ -15,6 +15,7 @@ The server provides tools for, among others:
 - **Images you post or receive** — API key formats (Google, OpenAI-style, Anthropic, Hugging Face, Replicate) left in the prompt/workflow metadata of a ComfyUI PNG, located by node, with values masked, a heads-up message for the key owner and a copy with the text chunks removed
 - **Before you send an AI-drafted reply** — dates, weekdays, times, amounts, quantities, phone numbers and names in the reply that are not in the email you received (or your own facts), plus leftover placeholders such as `[Customer 1]` or XX
 - **Choosing an email address** — read-aloud text and length (morae or syllables) for up to five address options, with counts of symbols, repeated characters and digits, and a per-character phonetic-alphabet table
+- **Planning time off together** — how many days two people with different days off are both off in 2027 (by month), and up to three breaks made with paid leave within each person's leave and a shared limit
 - **Internal docs** — near-duplicate pages, orphan pages, inconsistent or outdated terms and broken links in a wiki exported from Notion, Confluence and the like, with suggested fixes
 - **Developer utilities** — JSON ⇄ YAML, CSV/TSV ⇄ JSON, Markdown tables, SQL formatting, text/code diffing, cron explanation, Base64/data URIs, HTML escaping, hashing, JWT decoding, User-Agent parsing, UUID/ULID, Unix time, IP/CIDR calculation, business-day date calculation, case conversion, line operations (dedupe, sort, number), htpasswd generation for Basic auth, test data generation
 

@@ -120,6 +120,7 @@ try {
     'openapi_doc_generate',
     'px_rem_convert',
     'qr_generate',
+    'renkyu_pair_plan',
     'reply_check',
     'robotstxt_generate',
     'serp_check',
@@ -956,6 +957,16 @@ try {
   // 説明どおり、改行区切りの1つの文字列でも MCP のスキーマで弾かれない
   const erStr = await callTool('email_read_aloud', { candidates: 'hanaya.sakura@example.com\nhello@example.jp' }, 195);
   assert.deepEqual(erStr.items.map((x) => x.label), ['B', 'A'], `email_read_aloud string input: ${JSON.stringify(erStr)}`);
+
+  // renkyu_pair_plan: 既定（2人とも土日）は123日・GW の11連休が案1、曜日の範囲外はスキーマで弾く
+  const rk = await callTool('renkyu_pair_plan', { partner: { days: [0, 3] } }, 196);
+  assert.equal(rk.together, 72, `renkyu_pair_plan: ${JSON.stringify(rk)}`);
+  assert.equal(rk.candidates[0].start, '2027-04-27');
+  assert.equal(rk.url, 'https://tools.first-ch.com/renkyu-2027/#a=06&ah=1&ay=1&al=3&b=03&bh=1&by=1&bl=3&n=6');
+  const rkDef = await callTool('renkyu_pair_plan', {}, 197);
+  assert.equal(rkDef.text, '2027年、2人そろって休めるのは123日。有給をわたし3日・相手3日使うと4/29〜5/9の11連休');
+  const rkErr = await request('tools/call', { name: 'renkyu_pair_plan', arguments: { me: { days: [7] } } }, 198);
+  assert.ok(rkErr.result?.isError || rkErr.error, `renkyu_pair_plan should reject weekday 7: ${JSON.stringify(rkErr)}`);
 
   // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
   const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);
