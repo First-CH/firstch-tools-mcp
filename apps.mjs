@@ -423,6 +423,25 @@ const DEFS = [
     },
   },
   {
+    slug: 'hondai-wariai',
+    apiPath: '/hondai-wariai/api/check',
+    title: 'そのGoogleリンク、ログインなしで開く？（共有リンクの確認）',
+    summary:
+      'Google のドキュメント・スプレッドシート・スライド・ドライブのファイルとフォルダの共有リンクを1つ受け取り、ログインしていない状態で Google へ1回だけ問い合わせて、相手側から見た状態を返す。' +
+      'verdict は login（ログインが必要）・public（ログインなしで閲覧できる見込み。fileName にファイル名）・not_found（見つからない）・unknown（判定できない。reason に理由）のどれか。直し方（steps）と Google 公式ヘルプのリンク、チームに伝える一言（share）も返す。' +
+      'サーバーは URL からファイルIDだけを取り出し、docs.google.com・drive.google.com の決まった形の URL に組み直して問い合わせる（転送は追わない・5秒・64KB）。Google 以外のサービスや「ウェブに公開」の URL（/d/e/…）は受けない。同じIPから1分に5回まで。',
+    sends: '入力した Google の共有リンク',
+    fetches: true,
+    inputSchema: {
+      url: z
+        .string()
+        .min(1)
+        .max(2048)
+        .describe('Google の共有リンク（docs.google.com の document・spreadsheets・presentation、drive.google.com の file・folders・open?id=。2048文字まで）'),
+      lang: LANG,
+    },
+  },
+  {
     slug: 'lp-persona-check',
     apiPath: '/lp-persona-check/api/check',
     title: 'LP文言・ペルソナ反応チェッカー（AI）',
@@ -545,6 +564,7 @@ const DEFS = [
       picks: z
         .array(z.enum(['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8']))
         .max(2)
+        .refine((a) => new Set(a).size === a.length, { message: '同じ手がかりIDを2回選べません' })
         .optional()
         .describe('言い換える投稿の手がかりID（c1〜c8・重複なしで2件まで。省略時は0件）'),
       final: z.boolean().optional().describe('true なら答え合わせ（result）も返す。既定 false'),
