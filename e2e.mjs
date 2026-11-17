@@ -120,6 +120,7 @@ try {
     'openapi_doc_generate',
     'px_rem_convert',
     'qr_generate',
+    'kuronuri_tail',
     'renkyu_pair_plan',
     'reply_check',
     'robotstxt_generate',
@@ -967,6 +968,10 @@ try {
   assert.equal(rkDef.text, '2027年、2人そろって休めるのは123日。有給をわたし3日・相手3日使うと4/29〜5/9の11連休');
   const rkErr = await request('tools/call', { name: 'renkyu_pair_plan', arguments: { me: { days: [7] } } }, 198);
   assert.ok(rkErr.result?.isError || rkErr.error, `renkyu_pair_plan should reject weekday 7: ${JSON.stringify(rkErr)}`);
+
+  const kt = await callTool('kuronuri_tail', { base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCCAAEC' }, 199);
+  assert.equal(kt.status, 'found', `kuronuri_tail: ${JSON.stringify(kt)}`);
+  assert.equal(kt.trailingBytes, 3);
 
   // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
   const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);

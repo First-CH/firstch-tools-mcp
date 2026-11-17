@@ -52,6 +52,7 @@ import { comfyPngLeakTool } from './comfy-png-leak.mjs';
 import { aiVsSearchTool } from './ai-vs-search.mjs';
 import { emailReadAloudTool } from './email-read-aloud.mjs';
 import { renkyuPairTool } from './renkyu-pair.mjs';
+import { kuronuriTailTool } from './kuronuri-tail.mjs';
 import { replyCheckTool } from './reply-check.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
@@ -2171,6 +2172,27 @@ registerTool(
   async (opts) => {
     await logUsage('renkyu_pair_plan');
     return asText(renkyuPairTool(opts));
+  },
+);
+
+registerTool(
+  'kuronuri_tail',
+  {
+    title: '画像の終端より後ろのデータの有無とバイト数（PNG・JPEG）',
+    description:
+      'PNG・JPEG の画像の本体の終わりを決め、その後ろに付いたデータの有無とバイト数を返す（tools.first-ch.com/kuronuri/ と同一ロジック）。' +
+      'PNG はシグネチャの後ろのチャンクを順に読み、長さ・名前・CRC を確かめて IEND まで（先頭は IHDR・IDAT が1つ以上）。JPEG は SOI の後ろのマーカーを順に読み、長さを持つセグメントは長さで飛ばす（EXIF の埋め込みサムネイルの FFD9 は終端にしない）。SOS の後ろの符号化データは FF00 と RST を飛ばして次のマーカーまで進み、SOF と SOS の後の EOI を本体の終わりとする（プログレッシブの複数の SOS も読む）。' +
+      'status は found（後ろにデータあり・trailingBytes にバイト数）/ none（なし）/ unknown（解析不能。reason は NOT_PNG_OR_JPEG・TRUNCATED・BAD_CRC・BAD_CHUNK・NO_HEADER・NO_IMAGE_DATA・BAD_MARKER・BAD_LENGTH、at はその位置）。imageEnd は本体の終わりのバイト位置。' +
+      '後ろのデータには、編集前の画像の一部やカメラが付けた別の画像・動画が入っていることがある。黒塗り・マーカーが透けているかの判定、後ろのデータからの復元、画像の書き換えはしない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      base64: z.string().optional().describe('画像（PNG・JPEG）の Base64（data URI 可・50MBまで）'),
+      path: z.string().optional().describe('base64 の代わりに、画像ファイルの絶対パス（任意）'),
+      lang: z.enum(['ja', 'en']).optional().describe("summary・note の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('kuronuri_tail');
+    return asText(await kuronuriTailTool(opts));
   },
 );
 

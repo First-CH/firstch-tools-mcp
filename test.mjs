@@ -5375,4 +5375,37 @@ components:
   console.log('renkyu_pair_plan ok');
 }
 
+// ==================== kuronuri_tail ====================
+{
+  const { kuronuriTailTool, inspectTail, crc32, KuronuriTailError } = await import('./kuronuri-tail.mjs');
+  const { deflateSync } = await import('node:zlib');
+  const u8 = (...parts) => Uint8Array.from(parts.flatMap((p) => [...p]));
+  const chunk = (type, data) => {
+    const body = u8(Buffer.from(type, 'latin1'), data);
+    const c = crc32(body, 0, body.length), n = data.length;
+    return u8([n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255], body, [c >>> 24, (c >>> 16) & 255, (c >>> 8) & 255, c & 255]);
+  };
+  const png = u8([137, 80, 78, 71, 13, 10, 26, 10], chunk('IHDR', [0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]), chunk('IDAT', deflateSync(Buffer.from([0, 9, 9, 9]))), chunk('IEND', []));
+  const b64 = (b) => Buffer.from(b).toString('base64');
+  const none = await kuronuriTailTool({ base64: b64(png) });
+  assert.equal(none.status, 'none'); assert.equal(none.hasTrailing, false); assert.equal(none.trailingBytes, 0); assert.equal(none.format, 'png');
+  const found = await kuronuriTailTool({ base64: 'data:image/png;base64,' + b64(u8(png, [1, 2, 3, 4, 5])), lang: 'en' });
+  assert.equal(found.status, 'found'); assert.equal(found.trailingBytes, 5); assert.equal(found.imageEnd, png.length);
+  assert.ok(found.summary.startsWith('Yes: 5 bytes'));
+  // JPEG: APP1 の中のサムネイルの FFD9 は終端にしない・FF00 と RST を飛ばす
+  const seg = (m, p) => u8([0xff, m, (p.length + 2) >> 8, (p.length + 2) & 255], p);
+  const jpg = u8([0xff, 0xd8], seg(0xe1, [0x45, 0x78, 0x69, 0x66, 0, 0, 0xff, 0xd8, 0xff, 0xd9]), seg(0xc0, [8, 0, 1, 0, 1, 1, 1, 0x11, 0]), seg(0xda, [1, 1, 0, 0, 63, 0]), [1, 0xff, 0, 2, 0xff, 0xd0, 3], [0xff, 0xd9]);
+  assert.equal(inspectTail(jpg).status, 'none');
+  assert.equal((await kuronuriTailTool({ base64: b64(u8(jpg, jpg)) })).trailingBytes, jpg.length);
+  const cut = await kuronuriTailTool({ base64: b64(jpg.slice(0, jpg.length - 2)) });
+  assert.equal(cut.status, 'unknown'); assert.equal(cut.reason, 'TRUNCATED'); assert.equal(cut.hasTrailing, null);
+  const bad = png.slice(); bad[bad.length - 16] ^= 1;
+  assert.equal((await kuronuriTailTool({ base64: b64(bad) })).reason, 'BAD_CRC');
+  assert.equal((await kuronuriTailTool({ base64: b64(Buffer.from('GIF89a')) })).reason, 'NOT_PNG_OR_JPEG');
+  await assert.rejects(() => kuronuriTailTool({}), (e) => e instanceof KuronuriTailError && e.code === 'NO_INPUT');
+  await assert.rejects(() => kuronuriTailTool({ base64: '%%%' }), (e) => e.code === 'INVALID_BASE64');
+  await assert.rejects(() => kuronuriTailTool({ path: 'rel.png' }), (e) => e.code === 'PATH_NOT_ABSOLUTE');
+  console.log('kuronuri_tail ok');
+}
+
 console.log('all tests passed');
