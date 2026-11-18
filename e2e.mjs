@@ -123,6 +123,7 @@ try {
     'kuronuri_tail',
     'renkyu_pair_plan',
     'reply_check',
+    'romaji_name_check',
     'robotstxt_generate',
     'serp_check',
     'slug_generate',
@@ -972,6 +973,12 @@ try {
   const kt = await callTool('kuronuri_tail', { base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYGAAAAAEAAH2FzhVAAAAAElFTkSuQmCCAAEC' }, 199);
   assert.equal(kt.status, 'found', `kuronuri_tail: ${JSON.stringify(kt)}`);
   assert.equal(kt.trailingBytes, 3);
+
+  const rn = await callTool('romaji_name_check', { surname: 'HOMMA', given: 'JUNICHI', documents: [{ label: 'ticket', text: 'HONMA/JUNICHI MR' }, 'HOMMA JUNICHI'], lang: 'en' }, 1990);
+  assert.deepEqual(rn.documents.map((d) => d.verdict), ['diff', 'match'], `romaji_name_check: ${JSON.stringify(rn)}`);
+  assert.deepEqual(rn.documents[0].differences.map((d) => d.kind), ['title', 'nm']);
+  const rnErr = await request('tools/call', { name: 'romaji_name_check', arguments: { surname: 'A', status: 'lost' } }, 1991);
+  assert.ok(rnErr.result?.isError || rnErr.error, `romaji_name_check should reject status lost: ${JSON.stringify(rnErr)}`);
 
   // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
   const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);

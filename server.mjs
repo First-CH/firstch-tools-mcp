@@ -53,6 +53,7 @@ import { aiVsSearchTool } from './ai-vs-search.mjs';
 import { emailReadAloudTool } from './email-read-aloud.mjs';
 import { renkyuPairTool } from './renkyu-pair.mjs';
 import { kuronuriTailTool } from './kuronuri-tail.mjs';
+import { romajiNameTool } from './romaji-name.mjs';
 import { replyCheckTool } from './reply-check.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
@@ -2193,6 +2194,35 @@ registerTool(
   async (opts) => {
     await logUsage('kuronuri_tail');
     return asText(await kuronuriTailTool(opts));
+  },
+);
+
+registerTool(
+  'romaji_name_check',
+  {
+    title: 'パスポートの氏名と書類のつづりを1文字ずつ見比べ（航空券・ESTA など）',
+    description:
+      'パスポートに印字された姓・名（surname・given）と、書類（航空券・ESTA・マイレージ・ホテル・マイナンバーカードなど）のつづりを最大6つ受け取り、1文字ずつ並べて書類ごとに一致（match）か違いあり（diff）かを返す（tools.first-ch.com/romaji/ と同一ロジック）。' +
+      '書類のつづりは「姓 名」か「姓/名」（区切りの前を姓とみなす）。大文字小文字・全角半角は同じとみなし、前後の敬称（MR・MS など）は外して title として返す。' +
+      '違いの kind は swap（姓と名の入れ替え）・sep（空白・ハイフン）・ou（OとU。O の後ろの U・O と O⇄U）・nm（B・M・P の前の N と M）・lookalike（0とO・1とI など）・drop（欠落）・add（追加）・sub（違う字）・title（敬称）・extra_word（ミドルネーム欄などの余分な語）・nonlatin（ローマ字以外の文字）。位置は part（surname / given / between）と position（何文字目）・after（その字の後ろ）。' +
+      'status は have（手元にある・既定）/ unknown（取ったが表記不明・紛失＝照合せず基準未確認）/ never（取ったことがない＝対象外）。review=true（別名併記・改姓）なら全行を review（要確認）にする。' +
+      '仮名からのローマ字生成・長音の判定・非ヘボン表記の可否・航空会社ごとの訂正の可否・搭乗や申請の可否は返さない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      surname: z.string().optional().describe('パスポートに印字された姓（ローマ字）'),
+      given: z.string().optional().describe('パスポートに印字された名（ローマ字）'),
+      documents: z
+        .array(z.union([z.string(), z.object({ label: z.string().optional(), text: z.string() })]))
+        .max(6)
+        .optional()
+        .describe('比べる書類（最大6つ）。{ label: "航空券", text: "SATO/HANAKO MS" } か、つづりの文字列'),
+      status: z.enum(['have', 'unknown', 'never']).optional().describe("パスポートの状態（既定 'have'）"),
+      review: z.boolean().optional().describe('別名併記がある・取った後に姓が変わったなら true（全行を要確認にする）'),
+      lang: z.enum(['ja', 'en']).optional().describe("label・text・notes の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('romaji_name_check');
+    return asText(romajiNameTool(opts));
   },
 );
 

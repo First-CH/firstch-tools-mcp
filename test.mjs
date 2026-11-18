@@ -5408,4 +5408,33 @@ components:
   console.log('kuronuri_tail ok');
 }
 
+// ==================== romaji_name_check ====================
+{
+  const { romajiNameTool, compareOne, RomajiError } = await import('./romaji-name.mjs');
+  const r = romajiNameTool({ surname: 'Sato', given: 'Hanako', documents: [{ label: '航空券', text: 'SATOU/HANAKO MS' }, 'sato hanako', { label: 'ホテル', text: 'HANAKO SATO' }] });
+  assert.equal(r.passport, 'SATO HANAKO');
+  assert.deepEqual(r.documents.map((d) => d.verdict), ['diff', 'match', 'diff']);
+  assert.deepEqual(r.documents[0].differences.map((d) => d.kind), ['title', 'ou']);
+  assert.equal(r.documents[0].differences[1].text, 'OとUの違い: 姓の4文字目の後ろ U が余分');
+  assert.equal(r.documents[0].differences[1].part, 'surname');
+  assert.equal(r.documents[2].differences[0].kind, 'swap');
+  assert.equal(r.documents[1].label, '2');
+  const kinds = (t, s = 'SATO', g = 'HANAKO') => compareOne(s, g, t).diffs.map((d) => d.kind);
+  assert.deepEqual(kinds('HONMA JUNICHI', 'HOMMA', 'JUNICHI'), ['nm']);
+  assert.deepEqual(kinds('KAMDA MIKI', 'KANDA', 'MIKI'), ['sub']);
+  assert.deepEqual(kinds('SAT0 HANAKO'), ['lookalike']);
+  assert.deepEqual(kinds('SATO-HANAKO'), ['sep']);
+  assert.deepEqual(kinds('SATO HANAKO MARIE'), ['extra_word']);
+  assert.deepEqual(kinds('佐藤 HANAKO'), ['nonlatin']);
+  assert.deepEqual(kinds('ＳＡＴＯ　ＨＡＮＡＫＯ'), []);
+  const rv = romajiNameTool({ surname: 'SATO', given: 'HANAKO', documents: ['SATO HANAKO'], review: true, lang: 'en' });
+  assert.equal(rv.documents[0].verdict, 'review');
+  const st = romajiNameTool({ status: 'unknown', documents: ['SATO HANAKO'] });
+  assert.equal(st.stopped, true); assert.deepEqual(st.documents, []); assert.ok(st.notes[0].startsWith('基準未確認'));
+  assert.throws(() => romajiNameTool({ documents: ['A B'] }), (e) => e instanceof RomajiError && e.code === 'NO_NAME');
+  assert.throws(() => romajiNameTool({ surname: 'A', status: 'x' }), (e) => e.code === 'BAD_STATUS');
+  assert.throws(() => romajiNameTool({ surname: 'A', documents: Array(7).fill('A') }), (e) => e.code === 'TOO_MANY');
+  console.log('romaji_name_check ok');
+}
+
 console.log('all tests passed');
