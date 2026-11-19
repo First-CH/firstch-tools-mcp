@@ -145,6 +145,9 @@ const jsonRes = (obj, status = 200, headers = {}) =>
   assert.ok(parse('app_faq_site_diff', { faq: 'https://e.example/faq/', sites: ['https://e.example/p/'] }).success);
   assert.ok(!parse('app_faq_site_diff', { faq: 'https://e.example/faq/', sites: [] }).success);
   assert.ok(!parse('app_nap_check', { urls: ['a', 'b', 'c', 'd'] }).success);
+  assert.ok(parse('app_hp_seisakuhi_url', { url: 'https://example.com/', lang: 'ja' }).success);
+  assert.ok(!parse('app_hp_seisakuhi_url', { lang: 'ja' }).success, 'url は必須');
+  assert.ok(!parse('app_hp_seisakuhi_url', { url: 'https://example.com/' + 'a'.repeat(2100) }).success, 'URL は2,048字まで');
   assert.ok(parse('app_shuusei_irai_memo', { url: 'https://example.com/', old: '03-0123-4567', new: '03-0987-6543' }).success);
   assert.ok(!parse('app_shuusei_irai_memo', { url: 'https://example.com/', old: '03-0123-4567' }).success, 'new は必須');
   assert.ok(!parse('app_shuusei_irai_memo', { url: 'https://example.com/', old: '0'.repeat(41), new: '03-0987-6543' }).success);
@@ -211,6 +214,7 @@ const jsonRes = (obj, status = 200, headers = {}) =>
     ['app_faq_site_diff', { faq: 'https://example.com/faq/', sites: ['https://example.com/pricing/'] }, '/faq-site-diff/api/check'],
     ['app_nap_check', { urls: ['https://example.com/', 'https://example.com/company/'] }, '/nap-check/api/check'],
     ['app_shuusei_irai_memo', { url: 'https://example.com/', old: '03-0123-4567', new: '03-0987-6543' }, '/shuusei-irai-memo/api/check'],
+    ['app_hp_seisakuhi_url', { url: 'https://example.com/' }, '/hp-seisakuhi-url/api/parts'],
     ['app_myip', {}, '/myip/api/info'],
   ];
   for (const [name, args, path] of cases) {
