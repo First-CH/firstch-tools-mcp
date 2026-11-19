@@ -502,6 +502,25 @@ const DEFS = [
     },
   },
   {
+    slug: 'shuusei-irai-memo',
+    apiPath: '/shuusei-irai-memo/api/check',
+    title: '電話番号を変えた後、HPに残る旧番号と「押すと旧番号」を探す',
+    summary:
+      'HPのURLと旧番号・新番号（日本の0始まり10〜11桁）を受け取り、robots.txt を守って sitemap.xml（無ければトップの同じホストへのリンク）から同じサイトの最大10ページ（各先頭512KB・全体20秒）を1件ずつ取得し、旧番号が残る場所を返す。' +
+      '比べるのは1つのテキストノードの中・tel: のリンク先・JSON-LD の telephone だけで、番号は数字だけにそろえる（全角・ハイフン・括弧を除き、+81 は 0）。別々の要素にまたがる数字はつなげない。' +
+      '場所ごとにページのパス・場所の種類（本文／電話ボタンのリンク先／検索エンジン向け店舗情報）・直前の見出し・見つかった表記・前後20字を返し、表示は新番号なのにリンク先が旧番号のボタンの数（mismatch）と、確認したページ n/10・取得できなかったページ・512KBで打ち切ったページの行（scopeLine）を返す。' +
+      '画像・PDF・スクリプトで出る文字は見ない。住所・料金・営業時間は探さない。ページの原文は返さない。同じIPから10分に10回まで（超えると HTTP 429）。',
+    sends: '入力したURLと旧番号・新番号',
+    fetches: true,
+    slow: true,
+    inputSchema: {
+      url: URL_PARAM('調べるHPのURL（トップページ）'),
+      old: z.string().min(1).max(40).describe('旧電話番号（例: 03-0123-4567。全角・括弧・+81 も可。40文字まで）'),
+      new: z.string().min(1).max(40).describe('新電話番号（旧番号と別の番号。40文字まで）'),
+      lang: LANG,
+    },
+  },
+  {
     slug: 'henji-kuru',
     apiPath: '/henji-kuru/api/read',
     title: 'LINEの出欠の返事の判定（AI・出欠集計の要確認行）',
