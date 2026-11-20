@@ -47,7 +47,7 @@ This server is also registered in the [MCP Registry](https://registry.modelconte
 | Tool | What it does | Main input |
 | --- | --- | --- |
 | `contrast_check` | Computes the WCAG 2.1 contrast ratio between a foreground and background color and returns AA/AAA pass/fail (normal text, large text, UI components) | `fg`, `bg` (hex, e.g. `#333333` / `333` / `fff`) |
-| `count_chars` | Counts Japanese text by grapheme, breaks it down into zenkaku/hankaku, counts lines, and computes the X (Twitter) post weight (zenkaku=2, hankaku=1, URL=23 flat, limit 280) | `text` |
+| `count_chars` | Counts Japanese text by grapheme, breaks it down into zenkaku/hankaku, counts lines, and computes the X (Twitter) post weight (zenkaku=2, hankaku=1, URL=23 flat incl. scheme-less ones like `example.com`, emoji cluster=2, NFC, limit 280 — same as tools.first-ch.com/x-length/) | `text` |
 | `webp_convert` | Converts PNG/JPEG files (absolute paths) to WebP using the same libwebp WASM encoder (default quality 80) as the browser tool at tools.first-ch.com/webp/. Output defaults to the same directory as each input with a `.webp` extension | `paths[]` (absolute paths), `quality?` (1-100), `outputDir?` |
 | `jsonld_generate` | Generates schema.org JSON-LD for `organization` / `faqpage` / `service` / `breadcrumb`. Empty fields are omitted automatically. Returns both a `json` object and a ready-to-embed `<script>` snippet | `type`, plus the matching `organization` / `faq` / `service` / `breadcrumb` object |
 | `llmstxt_generate` | Generates an `llms.txt` file (per the llmstxt.org proposed format) summarizing a site for AI crawlers/agents | `siteName`, `summary?`, `notes?`, `sections?` |
@@ -250,7 +250,7 @@ claude mcp add firstch-tools -- npx -y @first-ch/tools-mcp
 | ツール | 何をするか | 主な入力 |
 | --- | --- | --- |
 | `contrast_check` | 文字色と背景色のWCAG 2.1コントラスト比を計算し、AA/AAA基準（通常テキスト・大テキスト・UI部品）の合否を返す | `fg`・`bg`（hex。例: `#333333` / `333` / `fff`） |
-| `count_chars` | 日本語テキストを書記素単位で数え、全角/半角内訳・行数・X(Twitter)投稿ウェイト（全角=2・半角=1・URL=一律23・上限280）を返す | `text` |
+| `count_chars` | 日本語テキストを書記素単位で数え、全角/半角内訳・行数・X(Twitter)投稿ウェイト（全角=2・半角=1・URL=一律23〔`example.com` のようなスキーム無しも含む〕・絵文字の塊=2・NFC 正規化・上限280。tools.first-ch.com/x-length/ と同一）を返す | `text` |
 | `webp_convert` | PNG/JPEG画像（絶対パス）をWebPへ変換する。tools.first-ch.com/webp/ と同一のlibwebp WASMエンコーダ（品質既定80）。出力先省略時は各入力と同じ場所に拡張子`.webp`で保存 | `paths[]`（絶対パス）・`quality?`（1-100）・`outputDir?` |
 | `jsonld_generate` | schema.org準拠のJSON-LDを生成する（`organization` / `faqpage` / `service` / `breadcrumb`）。空項目は自動で省略。`json`オブジェクトと埋め込み用`<script>`スニペットの両方を返す | `type` と対応する `organization` / `faq` / `service` / `breadcrumb` オブジェクト |
 | `llmstxt_generate` | AI検索・生成AI向けにサイト概要を伝える `llms.txt`（llmstxt.org提案フォーマット準拠）を生成する | `siteName`・`summary?`・`notes?`・`sections?` |

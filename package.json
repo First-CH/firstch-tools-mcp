@@ -284,6 +284,7 @@
     "server.mjs",
     "apps.mjs",
     "lib.mjs",
+    "x-weight.mjs",
     "fs-safe.mjs",
     "fit-to-box.mjs",
     "invoice-nebiki.mjs",

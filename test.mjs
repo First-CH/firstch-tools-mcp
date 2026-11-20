@@ -133,6 +133,57 @@ const over = countChars('あ'.repeat(141));
 assert.equal(over.x_weight, 282);
 assert.equal(over.x_postable, false);
 
+// count_chars の x_weight は site/x-length/app.js のウェイト計算コア（x-weight.mjs）と同じ値になる。
+// 期待値はサイト側の検査（tests/moji.test.mjs）と同じ表＝ npm の twitter-text 3.1.0 の weightedLength。
+{
+  const { measure } = await import('./x-weight.mjs');
+  const cases = [
+    ['あ'.repeat(140), 280], ['あ'.repeat(141), 282], ['a'.repeat(280), 280], ['a'.repeat(281), 281],
+    ['あ'.repeat(128) + ' https://tools.first-ch.com/moji/?utm_source=x&utm_medium=social', 280],
+    ['https://example.com/' + 'x'.repeat(200), 23], ['example.com を見て', 30], ['tools.first-ch.com/moji/', 23],
+    ['👨‍👩‍👦', 2], ['🇯🇵', 2], ['1️⃣', 2], ['👍🏽', 2], ['ガ', 2], ['ガ', 2], ['é', 1], ['café', 4],
+    ['@first_ch こんにちは', 20], ['こんにちは @first_ch', 20], ['#文字数カウント', 15], ['#Webツール test', 15],
+    ['Hello, world', 12], ['“quoted” — dash…', 17], ['Ａ１。、「」', 12], ['한국어', 6], ['Привет мир', 10],
+    ['line1\nline2\r\n', 13],
+    // ここから下はサイトの About の実例表と、URL の後ろの和文括弧・句点を URL に含めない確認（サイトの実装で出した値）
+    ['https://tools.first-ch.com/moji/?utm_source=x', 23], ['文字数カウント', 14],
+    ['見て（example.com）', 31], ['example.com。', 25],
+  ];
+  for (const [s, w] of cases) {
+    assert.equal(measure(s, 280).weight, w, JSON.stringify(s));
+    assert.equal(countChars(s).x_weight, w, 'count_chars: ' + JSON.stringify(s));
+  }
+  assert.equal(countChars('example.com を見て').x_urls, 1);
+  assert.equal(countChars('a.b を見て').x_urls, 0);
+
+  // サイト側の正本と、コアの範囲が字下げ・export を除いて同一か（隣に FirstCHTools があるときだけ）
+  const { existsSync, readFileSync } = await import('node:fs');
+  const { join, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const site = [process.env.FIRSTCH_TOOLS_REPO, join(here, '..', 'FirstCHTools'), join(here, '..', 'firstchtools')]
+    .filter(Boolean)
+    .map((p) => join(p, 'site', 'x-length', 'app.js'))
+    .find((p) => existsSync(p));
+  const core = (src, strip) => {
+    const lines = src.split('\n');
+    const a = lines.findIndex((l) => /^ *\/\* =* ここからウェイト計算コア/.test(l));
+    const b = lines.findIndex((l) => /^ *\/\* =* ここまでウェイト計算コア/.test(l));
+    assert.ok(a !== -1 && b > a, 'ウェイト計算コアの目印が見つからない');
+    return lines.slice(a, b + 1).map(strip).join('\n');
+  };
+  if (!site) {
+    console.log('  skip - x-weight.mjs と site/x-length/app.js の突合（FirstCHTools が見つからない。FIRSTCH_TOOLS_REPO で場所を指定できる）');
+  } else {
+    assert.equal(
+      core(readFileSync(join(here, 'x-weight.mjs'), 'utf8'), (l) => l.replace(/^export /, '')),
+      core(readFileSync(site, 'utf8'), (l) => l.replace(/^  /, '')),
+      'x-weight.mjs のウェイト計算コアが site/x-length/app.js と違う',
+    );
+    console.log('  ok - x-weight.mjs のコアは site/x-length/app.js と同一');
+  }
+}
+
 // llmstxt_generate: サイトのフォーム出力（site/llms-txt/app.js）と同一形式
 {
   const { buildLlmsTxt } = await import('./lib.mjs');

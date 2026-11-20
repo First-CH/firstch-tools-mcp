@@ -2,6 +2,8 @@
 // site側を変更したらこちらも同期すること（正本はこのファイルとsite側の2重管理を避けるため、
 // アルゴリズム変更時は必ず両方を1コミットで更新する）。
 
+import { measure, X_DEFAULT_LIMIT } from './x-weight.mjs';
+
 export function parseHex(s) {
   s = String(s).trim().replace(/^#/, '');
   if (/^[0-9a-f]{3}$/i.test(s)) s = s.split('').map((c) => c + c).join('');
@@ -46,8 +48,6 @@ function charWeight(cp) {
   return 2;
 }
 
-const URL_RE = /https?:\/\/[^\s]+/g;
-
 function graphemes(s) {
   const seg = new Intl.Segmenter('ja', { granularity: 'grapheme' });
   return [...seg.segment(s)].map((x) => x.segment);
@@ -63,10 +63,10 @@ export function countChars(text) {
     if (/\s/.test(g)) continue;
     charWeight(g.codePointAt(0)) === 1 ? han++ : zen++;
   }
-  let weight = (v.match(URL_RE) || []).length * 23;
-  for (const g of graphemes(v.replace(URL_RE, ''))) {
-    weight += g.length > 1 ? 2 : charWeight(g.codePointAt(0));
-  }
+  // X のウェイトは site/x-length/app.js と同一のコア（x-weight.mjs）で数える
+  // （NFC 正規化・スキーム無しURL・結合文字・絵文字の塊まで X 本体と同じ扱い）
+  const x = measure(v, X_DEFAULT_LIMIT);
+  const weight = x.weight;
   return {
     total: gs.length,
     total_without_whitespace: graphemes(v.replace(/\s/g, '')).length,
@@ -74,9 +74,10 @@ export function countChars(text) {
     hankaku: han,
     lines: v === '' ? 0 : v.split('\n').length,
     x_weight: weight,
-    x_weight_limit: 280,
-    x_weight_remaining: 280 - weight,
-    x_postable: weight <= 280,
+    x_weight_limit: X_DEFAULT_LIMIT,
+    x_weight_remaining: X_DEFAULT_LIMIT - weight,
+    x_postable: weight <= X_DEFAULT_LIMIT,
+    x_urls: x.urls,
   };
 }
 
