@@ -285,6 +285,8 @@
     "apps.mjs",
     "lib.mjs",
     "x-weight.mjs",
+    "toolsets.mjs",
+    "prompts.mjs",
     "fs-safe.mjs",
     "fit-to-box.mjs",
     "invoice-nebiki.mjs",

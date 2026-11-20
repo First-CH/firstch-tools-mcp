@@ -45,6 +45,11 @@ In Claude Code:
 - **Node.js 24 or later.** The plugin starts the server with `npx -y @first-ch/tools-mcp@<version>` (the version is pinned in this plugin's `.mcp.json`), so Node.js must be installed even if your Claude client itself does not need it. Older Node versions print an `EBADENGINE` warning, and refuse to start if npm's `engine-strict` is enabled.
 - PDF output from `marp_render` additionally needs a locally installed Chrome/Chromium; without one, it returns HTML only.
 
+## Limiting the tool list and workflow prompts
+
+- The server registers every local tool by default. Set `FIRSTCH_TOOLSETS` (comma-separated: `web`, `seo`, `ja`, `image`, `doc`, `dev`, `data`, `apps`) in the server's environment to register only those categories and keep the tool list short. `apps` has an effect only together with `FIRSTCH_ENABLE_APPS=1`. The category list is in the [repository README](https://github.com/First-CH/firstch-tools-mcp#toolsets-firstch_toolsets).
+- The server also offers MCP prompts (step-by-step recipes): `image_before_publish`, `reply_before_send`, `ja_copy_check`, and `prelaunch_site_check` (only with `FIRSTCH_ENABLE_APPS=1`). They hand the steps to Claude and run nothing by themselves.
+
 ## Example prompts
 
 1. **Contrast check** — "Check whether #767676 text on a #ffffff background passes WCAG AA and AAA."

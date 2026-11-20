@@ -5,6 +5,8 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
 import { APP_TOOLS, callAppTool } from './apps.mjs';
+import { parseToolsets, toolsetOf, isToolEnabled, TOOLSET_NAMES } from './toolsets.mjs';
+import { availablePrompts } from './prompts.mjs';
 import { appendFile } from 'node:fs/promises';
 import { writeOutput } from './fs-safe.mjs';
 import { createRequire } from 'node:module';
@@ -61,9 +63,21 @@ const { version } = createRequire(import.meta.url)('./package.json');
 // 2026-07-28 仕様の server/discover の両方を、同じ登録内容で受ける）。ツールは下の registerTool で
 // 一覧に積み、buildServer() が接続のたびに登録する。
 const TOOLS = [];
+// プロンプト（作業の手順書・prompts.mjs）は、手順で使うツールがすべて登録されているものだけを出す。
+// TOOLS が出そろってから選ぶため、最初の接続のときに1度だけ決める。
+let PROMPTS_IN_USE = null;
 function buildServer() {
-  const server = new McpServer({ name: 'firstch-tools', version }, { capabilities: { tools: {} } });
+  PROMPTS_IN_USE ??= availablePrompts(new Set(TOOLS.map((t) => t.name)));
+  const capabilities = PROMPTS_IN_USE.length ? { tools: {}, prompts: {} } : { tools: {} };
+  const server = new McpServer({ name: 'firstch-tools', version }, { capabilities });
   for (const { name, config, handler } of TOOLS) server.registerTool(name, config, handler);
+  for (const p of PROMPTS_IN_USE) {
+    server.registerPrompt(
+      p.name,
+      { title: p.title, description: p.description, argsSchema: z.object(p.argsSchema) },
+      (args) => p.build(args ?? {}),
+    );
+  }
   return server;
 }
 
@@ -91,7 +105,23 @@ const OVERWRITE_PARAM = z
   .optional()
   .describe('出力先に同名のファイルがあるとき上書きするか（既定 false＝上書きせずエラーにする）');
 
+// FIRSTCH_TOOLSETS（カンマ区切り）で、登録するツールをカテゴリ単位で絞る（toolsets.mjs）。
+// 未設定なら端末内のツールをすべて登録する。知らない名前は標準エラーに警告して無視する
+// （stdout は MCP の通信路なので使わない）。
+const toolsetsEnv = parseToolsets(process.env.FIRSTCH_TOOLSETS);
+if (toolsetsEnv.unknown.length) {
+  console.error(
+    `[firstch-tools] FIRSTCH_TOOLSETS: 知らない名前を無視しました: ${toolsetsEnv.unknown.join(', ')}` +
+      `（使える名前: ${TOOLSET_NAMES.join(', ')}）`,
+  );
+  if (!toolsetsEnv.selected) console.error('[firstch-tools] FIRSTCH_TOOLSETS: 有効な名前が無いため、すべてのツールを登録します');
+}
+const SELECTED_TOOLSETS = toolsetsEnv.selected;
+
 function registerTool(name, config, handler) {
+  // カテゴリの無いツールは登録漏れ（toolsets.mjs に足す）。起動時に止めて気づけるようにする
+  if (toolsetOf(name) === null) throw new Error(`toolsets.mjs にカテゴリの無いツール: ${name}`);
+  if (!isToolEnabled(name, SELECTED_TOOLSETS)) return;
   let inputSchema = config.inputSchema || {};
   const annotations = { title: config.title, ...toolAnnotations(name, inputSchema) };
   if (!annotations.readOnlyHint && !('overwrite' in inputSchema)) {
@@ -101,7 +131,21 @@ function registerTool(name, config, handler) {
   TOOLS.push({ name, config: { ...config, inputSchema: z.object(inputSchema), annotations }, handler });
 }
 
-const asText = (obj) => ({ content: [{ type: 'text', text: JSON.stringify(obj, null, 2) }] });
+// 結果は従来どおり JSON の文字列を text で返し（古いクライアント向け）、プレーンなオブジェクトなら
+// 同じ中身を structuredContent にも載せる（構造化された結果を読めるクライアント向け）。
+// structuredContent は text を JSON.parse したもの＝ text と必ず同じ値（undefined の除去や Date の文字列化も同じ）。
+// outputSchema は宣言しない: SDK（@modelcontextprotocol/server v2）は outputSchema があるときだけ
+// structuredContent を検証し、合わなければ tools/call をエラーにするため、全出力が型に合うと
+// 検査で示せるまでは宣言しない。outputSchema が無ければ、オブジェクトの structuredContent は無加工で送られる。
+const isPlainObject = (v) =>
+  v !== null && typeof v === 'object' && !Array.isArray(v) &&
+  (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
+function asText(obj) {
+  const text = JSON.stringify(obj, null, 2);
+  const result = { content: [{ type: 'text', text }] };
+  if (isPlainObject(obj)) result.structuredContent = JSON.parse(text);
+  return result;
+}
 
 // 社内利用の計測（tools-strategy.md KPI 5）。環境変数を設定したときだけローカルJSONLに追記する
 // （opt-in・未設定なら一切記録しない）。ネットワーク送信は一切しない。
@@ -120,6 +164,10 @@ const logUsage = (tool) =>
 // 既定では登録しない（端末内で完結するツールだけを出す）。入力を外へ送るツールは、利用者が
 // FIRSTCH_ENABLE_APPS=1 で明示的に有効にしたときだけ出す（「既定では外部へ通信しない」を崩さないため・2026-10-21）
 const APPS_ENABLED = /^(1|true|yes|on)$/i.test(process.env.FIRSTCH_ENABLE_APPS ?? '');
+// ツールセットに apps を書いただけでは有効にしない（外部への通信は FIRSTCH_ENABLE_APPS=1 でだけ開く）
+if (SELECTED_TOOLSETS?.has('apps') && !APPS_ENABLED) {
+  console.error('[firstch-tools] FIRSTCH_TOOLSETS の apps は FIRSTCH_ENABLE_APPS=1 のときだけ有効です（app_* は登録しません）');
+}
 for (const def of APPS_ENABLED ? APP_TOOLS : []) {
   OPEN_WORLD.add(def.name);
   registerTool(

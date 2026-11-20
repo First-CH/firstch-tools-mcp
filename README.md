@@ -157,6 +157,38 @@ See [`server.mjs`](./server.mjs) for the exact Zod input schemas of the local to
 
 **PDF output (`marp_render`) needs a local Chrome/Chromium.** marp-core renders the HTML with no browser dependency (so the package stays light for `npx`); PDF is produced by driving a locally-installed Chrome/Chromium in headless mode. It is auto-detected on common paths, or set `MARP_CHROME_PATH` to the executable. If none is found, `marp_render` returns the HTML only and reports `pdf_skipped` — you can still open that HTML and print → PDF yourself (one slide per page).
 
+### Toolsets (`FIRSTCH_TOOLSETS`)
+
+Every local tool is registered by default. To keep the tool list short for your AI client, set `FIRSTCH_TOOLSETS` to a comma-separated list of categories; only tools in those categories are registered (for example `claude mcp add firstch-tools -e FIRSTCH_TOOLSETS=web,seo -- npx -y @first-ch/tools-mcp`). Unset or empty means every local tool, exactly as before. Unknown names are reported on stderr and ignored; if no valid name is left, nothing is filtered.
+
+| Toolset | Tools |
+|---|---|
+| `web` | `contrast_check`, `color_convert`, `px_rem_convert`, `aspect_ratio_calc`, `css_layout_generate`, `html_escape`, `url_params`, `qr_generate`, `user_agent_parse` |
+| `seo` | `jsonld_generate`, `faq_jsonld_generate`, `llmstxt_generate`, `robotstxt_generate`, `serp_check`, `slug_generate`, `ai_vs_search` |
+| `ja` | `count_chars`, `zenkaku_convert`, `wareki_convert`, `date_calc`, `fit_to_box`, `invoice_nebiki_check`, `reply_check`, `email_read_aloud`, `renkyu_pair_plan`, `romaji_name_check` |
+| `image` | `webp_convert`, `comfy_png_leak_scan`, `kuronuri_tail`, `dpi_calc` |
+| `doc` | `marp_render`, `html_to_markdown`, `markdown_table`, `openapi_doc_generate`, `wiki_doc_lint`, `diff_check`, `lines_process` |
+| `dev` | `cron_explain`, `base64_encode`, `hash_generate`, `jwt_decode`, `uuid_generate`, `sql_format`, `unixtime_convert`, `case_convert`, `cidr_calc`, `htpasswd_generate`, `encoding_convert` |
+| `data` | `testdata_generate`, `json_to_yaml`, `yaml_to_json`, `csv_convert` |
+| `apps` | every `app_*` tool — **only together with `FIRSTCH_ENABLE_APPS=1`**. Listing `apps` alone never turns on a tool that sends data out. |
+
+With `FIRSTCH_ENABLE_APPS=1` and no `FIRSTCH_TOOLSETS`, every local tool and every `app_*` tool is registered; with both set, only the listed toolsets are (include `apps` to keep the `app_*` tools).
+
+### Prompts (workflow recipes)
+
+The server also offers a few MCP prompts — step-by-step recipes that tell the model which tools to call in which order and how to summarise the result. A prompt runs nothing by itself; it only hands the steps to the model. A prompt is offered only when every tool it uses is registered (so toolsets and `FIRSTCH_ENABLE_APPS` also shape this list).
+
+| Prompt | Arguments | What it walks through |
+|---|---|---|
+| `prelaunch_site_check` | `url` | Runs the relevant `app_*` checks (redirects, SSL, security headers, meta tags, OGP, structured data, links, AI-crawler access, leftover placeholder text) on one URL and sorts the findings into "fix before launch / should fix / fine". Only offered with `FIRSTCH_ENABLE_APPS=1`; the URL is sent to apps.first-ch.com. |
+| `image_before_publish` | `path` | `kuronuri_tail` (data left after the image end) and `comfy_png_leak_scan` (API-key formats in ComfyUI metadata), then `webp_convert` only if both are clean. |
+| `reply_before_send` | `reply`, `received?`, `facts?` | `reply_check` on an AI-drafted reply, then fixes only the flagged dates, amounts, names and placeholder text. Never sends anything. |
+| `ja_copy_check` | `text`, `limit?` | `count_chars` (characters and X weight) and `zenkaku_convert` with `inspect: true` (mixed full/half width, invisible characters). |
+
+### Structured results
+
+Tool results keep the JSON text block they always had (for older clients) and, when the result is a JSON object, also carry the same object as `structuredContent`. No tool declares an `outputSchema` yet.
+
 ## Network access, files and privacy
 
 - **Local tools vs. `app_*` tools.** Every tool without the `app_` prefix runs entirely on your machine and sends nothing anywhere. **The `app_*` tools are the exception by design: each call sends its input (the URL, domain name, DKIM selector or text you pass) to First CH's server at apps.first-ch.com**, which processes it and returns the result. The apps store neither the input nor the result; the AI apps (`app_tone_check`, `app_lp_persona_check`) pass the text to Cloudflare Workers AI and keep only a per-day call count (no text, no IP) to enforce the daily cap. Like any web request, the call reveals your public IP address to apps.first-ch.com (hosted on Cloudflare); it is used only for in-memory per-IP rate limits and is not stored. The apps that check a site fetch that site from First CH's server. The User-Agent is `first-ch-tools-mcp/<version>`. Don't pass anything confidential to an `app_*` tool, and stick to the local tools when nothing may leave your machine. `FIRSTCH_APPS_BASE_URL` overrides the base URL (for testing).
@@ -359,6 +391,38 @@ claude mcp add firstch-tools -- npx -y @first-ch/tools-mcp
 正確な入力スキーマ（Zod定義）は、端末内のツールが [`server.mjs`](./server.mjs)、`app_*` ツールが [`apps.mjs`](./apps.mjs) を参照してください。
 
 **`marp_render` のPDF出力にはローカルの Chrome/Chromium が必要です。** marp-core によるHTML生成はブラウザ非依存（`npx` 導入を軽く保つため）で、PDFはローカルインストール済みの Chrome/Chromium を headless で駆動して生成します。定番パスから自動検出し、`MARP_CHROME_PATH` で実行ファイルを明示することもできます。見つからない場合は HTML のみを返し `pdf_skipped` を報告します（そのHTMLを開いて印刷→PDF保存でも1スライド=1ページで作成できます）。
+
+#### ツールセット（`FIRSTCH_TOOLSETS`）
+
+既定では端末内のツールをすべて登録します。AI クライアントに見せるツールの一覧を短くしたいときは、環境変数 `FIRSTCH_TOOLSETS` にカテゴリをカンマ区切りで指定すると、そのカテゴリのツールだけを登録します（例: `claude mcp add firstch-tools -e FIRSTCH_TOOLSETS=web,seo -- npx -y @first-ch/tools-mcp`）。未設定・空なら従来どおりすべてです。知らない名前は標準エラーに警告して無視し、有効な名前が1つも残らなければ絞り込みません。
+
+| ツールセット | ツール |
+|---|---|
+| `web` | `contrast_check`・`color_convert`・`px_rem_convert`・`aspect_ratio_calc`・`css_layout_generate`・`html_escape`・`url_params`・`qr_generate`・`user_agent_parse` |
+| `seo` | `jsonld_generate`・`faq_jsonld_generate`・`llmstxt_generate`・`robotstxt_generate`・`serp_check`・`slug_generate`・`ai_vs_search` |
+| `ja` | `count_chars`・`zenkaku_convert`・`wareki_convert`・`date_calc`・`fit_to_box`・`invoice_nebiki_check`・`reply_check`・`email_read_aloud`・`renkyu_pair_plan`・`romaji_name_check` |
+| `image` | `webp_convert`・`comfy_png_leak_scan`・`kuronuri_tail`・`dpi_calc` |
+| `doc` | `marp_render`・`html_to_markdown`・`markdown_table`・`openapi_doc_generate`・`wiki_doc_lint`・`diff_check`・`lines_process` |
+| `dev` | `cron_explain`・`base64_encode`・`hash_generate`・`jwt_decode`・`uuid_generate`・`sql_format`・`unixtime_convert`・`case_convert`・`cidr_calc`・`htpasswd_generate`・`encoding_convert` |
+| `data` | `testdata_generate`・`json_to_yaml`・`yaml_to_json`・`csv_convert` |
+| `apps` | `app_*` のすべて。**`FIRSTCH_ENABLE_APPS=1` と併せたときだけ**有効です。`apps` と書いただけでは、外へ送るツールは有効になりません。 |
+
+`FIRSTCH_ENABLE_APPS=1` だけを設定すると端末内のツールと `app_*` がすべて出ます。`FIRSTCH_TOOLSETS` も設定したときは、書いたツールセットだけが出ます（`app_*` も残すなら `apps` を含める）。
+
+#### プロンプト（作業の手順書）
+
+MCP の prompts として、よくある作業の手順書をいくつか出します。どのツールをどの順で呼び、何をまとめるかをモデルに渡すだけで、プロンプト自体は何も実行しません。手順で使うツールがすべて登録されているときだけ出すため、ツールセットと `FIRSTCH_ENABLE_APPS` でこの一覧も変わります。
+
+| プロンプト | 引数 | 内容 |
+|---|---|---|
+| `prelaunch_site_check` | `url` | 1つの URL に、関係する `app_*`（転送・SSL・セキュリティヘッダー・メタタグ・OGP・構造化データ・リンク・AI クローラーの許可・仮の文字の消し忘れ）をかけ、「公開前に必ず直す／直したほうがよい／問題なし」に分けてまとめる。`FIRSTCH_ENABLE_APPS=1` のときだけ出る。URL は apps.first-ch.com へ送られる |
+| `image_before_publish` | `path` | `kuronuri_tail`（画像の終わりより後ろに残ったデータ）と `comfy_png_leak_scan`（ComfyUI の埋め込みデータに残った API キーの形）を調べ、どちらも問題が無いときだけ `webp_convert` で変換する |
+| `reply_before_send` | `reply`・`received?`・`facts?` | AI が書いた返信案を `reply_check` で照合し、指摘された日付・金額・宛名・仮の文字だけを直す。送信はしない |
+| `ja_copy_check` | `text`・`limit?` | `count_chars`（文字数と X のウェイト）と `zenkaku_convert` の `inspect: true`（全角半角の混在・見えない文字）で点検する |
+
+#### 構造化された結果（structuredContent）
+
+ツールの結果は、従来どおりの JSON の文字列（text）に加えて、結果が JSON のオブジェクトなら同じ中身を `structuredContent` にも載せます（古いクライアントは text をそのまま読めます）。`outputSchema` はまだどのツールにも宣言していません。
 
 ### 通信・ファイル・プライバシー
 

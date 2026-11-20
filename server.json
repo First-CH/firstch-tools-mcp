@@ -17,6 +17,20 @@
       },
       "environmentVariables": [
         {
+          "name": "FIRSTCH_ENABLE_APPS",
+          "description": "Optional. Set to 1 to register the app_* tools, which send their input to apps.first-ch.com. Off by default.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "FIRSTCH_TOOLSETS",
+          "description": "Optional. Comma-separated toolsets to register (web, seo, ja, image, doc, dev, data, apps). Unset = every local tool. Unknown names are ignored.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
           "name": "FIRSTCH_TOOLS_USAGE_LOG",
           "description": "Optional. Path to a local JSONL file for opt-in usage logging. No logging when unset.",
           "isRequired": false,

@@ -5550,4 +5550,72 @@ components:
   console.log('romaji_name_check ok');
 }
 
+// ==================== ツールセット（FIRSTCH_TOOLSETS） ====================
+{
+  const { TOOLSETS, TOOLSET_NAMES, toolsetOf, parseToolsets, isToolEnabled } = await import('./toolsets.mjs');
+  const { readFileSync } = await import('node:fs');
+  // server.mjs で登録している端末内のツールが、どれか1つのカテゴリにだけ入っている
+  const src = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8');
+  const registered = [...src.matchAll(/^registerTool\(\n {2}'([a-z0-9_]+)'/gm)].map((m) => m[1]);
+  assert.ok(registered.length >= 50, `server.mjs の登録の読み取りに失敗: ${registered.length} 件`);
+  const assigned = Object.values(TOOLSETS).flat();
+  assert.equal(new Set(assigned).size, assigned.length, 'カテゴリをまたいで重複しているツールがある');
+  assert.deepEqual([...assigned].sort(), [...registered].sort(), 'toolsets.mjs と server.mjs の登録がずれている');
+  for (const name of registered) assert.notEqual(toolsetOf(name), null, name);
+  assert.equal(toolsetOf('app_meta_check'), 'apps');
+  assert.equal(toolsetOf('no_such_tool'), null);
+  assert.deepEqual(TOOLSET_NAMES, ['web', 'seo', 'ja', 'image', 'doc', 'dev', 'data', 'apps']);
+  // 読み方: 未設定・空は絞り込まない。空白・大文字小文字は問わない。知らない名前は unknown に出す
+  assert.deepEqual(parseToolsets(undefined), { selected: null, unknown: [] });
+  assert.deepEqual(parseToolsets(' , '), { selected: null, unknown: [] });
+  const p = parseToolsets(' Web, seo ,bogus');
+  assert.deepEqual([...p.selected], ['web', 'seo']);
+  assert.deepEqual(p.unknown, ['bogus']);
+  assert.deepEqual(parseToolsets('bogus'), { selected: null, unknown: ['bogus'] });
+  // 絞り込み
+  const only = (v) => registered.filter((n) => isToolEnabled(n, parseToolsets(v).selected));
+  assert.deepEqual(only(undefined).sort(), [...registered].sort());
+  assert.deepEqual(only('image').sort(), ['comfy_png_leak_scan', 'dpi_calc', 'kuronuri_tail', 'webp_convert']);
+  assert.equal(only('web,seo').length, TOOLSETS.web.length + TOOLSETS.seo.length);
+  assert.deepEqual(only('apps'), [], 'apps だけなら端末内のツールは出さない');
+  assert.equal(isToolEnabled('app_meta_check', parseToolsets('web').selected), false);
+  assert.equal(isToolEnabled('app_meta_check', parseToolsets('apps').selected), true);
+  // app_* の登録は FIRSTCH_ENABLE_APPS=1 が前提（ツールセットだけでは有効にならない）。server.mjs のその分岐を確かめる
+  assert.match(src, /for \(const def of APPS_ENABLED \? APP_TOOLS : \[\]\)/);
+  console.log('toolsets ok');
+}
+
+// ==================== プロンプト（作業の手順書） ====================
+{
+  const { PROMPTS, availablePrompts } = await import('./prompts.mjs');
+  const { TOOLSETS } = await import('./toolsets.mjs');
+  const { APP_TOOLS } = await import('./apps.mjs');
+  const local = new Set(Object.values(TOOLSETS).flat());
+  const all = new Set([...local, ...APP_TOOLS.map((d) => d.name)]);
+  assert.deepEqual(PROMPTS.map((p) => p.name), ['prelaunch_site_check', 'image_before_publish', 'reply_before_send', 'ja_copy_check']);
+  for (const p of PROMPTS) {
+    // requires は実在するツール。手順の文面に出てくるツール名も実在し、requires に入っている
+    for (const n of p.requires) assert.ok(all.has(n), `${p.name}: unknown tool ${n}`);
+    const args = Object.fromEntries(Object.keys(p.argsSchema).map((k) => [k, 'ARG_' + k]));
+    const msg = p.build(args);
+    assert.equal(msg.messages.length, 1);
+    assert.equal(msg.messages[0].role, 'user');
+    const t = msg.messages[0].content.text;
+    for (const m of t.matchAll(/\b([a-z]+(?:_[a-z]+)+)\b/g)) {
+      if (all.has(m[1])) assert.ok(p.requires.includes(m[1]), `${p.name} mentions ${m[1]} but does not require it`);
+    }
+    for (const k of Object.keys(p.argsSchema)) assert.ok(t.includes('ARG_' + k), `${p.name}: argument ${k} not in text`);
+    // 公開リポジトリ: 手順の文面は一般的な内容だけ（社内の URL やパスを書かない）
+    assert.doesNotMatch(t, /https?:\/\/(?!apps\.first-ch\.com)/);
+  }
+  // 端末内のツールだけなら prelaunch_site_check は出ない。app_* があれば出る
+  assert.deepEqual(availablePrompts(local).map((p) => p.name), ['image_before_publish', 'reply_before_send', 'ja_copy_check']);
+  assert.equal(availablePrompts(all).length, 4);
+  assert.deepEqual(availablePrompts(new Set(TOOLSETS.data)), []);
+  // 省略できる引数が無くても文面が作れる
+  assert.match(PROMPTS[2].build({ reply: 'x' }).messages[0].content.text, /（なし）/);
+  assert.doesNotMatch(PROMPTS[3].build({ text: 'x' }).messages[0].content.text, /上限は undefined/);
+  console.log('prompts ok');
+}
+
 console.log('all tests passed');
