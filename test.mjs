@@ -36,7 +36,7 @@ import {
 } from './jwt.mjs';
 import {
   uuidGenerate, generateIds, formatIds, uuidV4FromBytes, encodeUlidTime, encodeUlidRandom,
-  bumpUlidRandom, decodeUlid, UuidError,
+  bumpUlidRandom, decodeUlid, UuidError, uuidV7FromParts, randomV7Field, bumpV7Field, decodeUuidV7,
 } from './uuid.mjs';
 import {
   aspectRatioCalc, arGcd, arFormat, arSimplify, arApprox, arNearestPreset, arParseRatio,
@@ -2293,13 +2293,70 @@ assert.equal(over.x_postable, false);
   assert.deepEqual(big.ids, [...big.ids].sort());
 
   // 不正な引数は UuidError
-  assert.throws(() => uuidGenerate({ type: 'uuid7' }), UuidError);
+  assert.throws(() => uuidGenerate({ type: 'uuid8' }), UuidError);
   assert.throws(() => uuidGenerate({ count: 0 }), UuidError);
   assert.throws(() => uuidGenerate({ count: 101 }), UuidError);
   assert.throws(() => uuidGenerate({ count: 1.5 }), UuidError);
   assert.throws(() => uuidGenerate({ format: 'xml' }), UuidError);
   assert.throws(() => uuidGenerate({ type: 'uuid', timestamp: '2026-08-18' }), UuidError);
   assert.throws(() => uuidGenerate({ type: 'ulid', timestamp: 'yesterday' }), UuidError);
+}
+
+// ==================== uuid_generate（UUID v7） ====================
+{
+  // 構造: 先頭48bitが時刻・13文字目が7・17文字目が8〜b（RFC 9562 §5.7）
+  const t = Date.UTC(2026, 10, 10, 3, 4, 5, 678);
+  const { ids } = generateIds({ type: 'uuid7', count: 100, time: t });
+  for (const id of ids) {
+    assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.equal(decodeUuidV7(id).time, t);
+  }
+  // 同じミリ秒の100件でも文字列の昇順＝作った順（単調増加）・重複なし
+  assert.deepEqual([...ids].sort(), ids);
+  assert.equal(new Set(ids).size, 100);
+  // 境界値（site/uuid/app.js の uuidV7FromParts で出した値と同じ）
+  assert.equal(uuidV7FromParts(0, BigInt(0)), '00000000-0000-7000-8000-000000000000');
+  assert.equal(uuidV7FromParts(281474976710655, (BigInt(1) << BigInt(74)) - BigInt(1)), 'ffffffff-ffff-7fff-bfff-ffffffffffff');
+  assert.throws(() => uuidV7FromParts(-1, BigInt(0)), UuidError);
+  // 決め打ちの乱数で、site/uuid/app.js の generateIds と同じ3件になる
+  let k = 0;
+  const seq = (n) => Uint8Array.from({ length: n }, () => (k++ * 37 + 11) & 255);
+  assert.deepEqual(generateIds({ type: 'uuid7', count: 3, time: 1794279845678, rand: seq }).ids, [
+    '01a1c369-af2e-7cc1-957a-9fc4e90e3358',
+    '01a1c369-af2e-7cc1-957a-9fc566b0fb45',
+    '01a1c369-af2e-7cc1-957a-9fc577e756c6',
+  ]);
+  // 進め方: 1〜2^32 の幅で進め、74bitを超えたら null
+  const zero = () => new Uint8Array(4);
+  assert.equal(bumpV7Field(BigInt(5), zero), BigInt(6));
+  assert.equal(bumpV7Field(BigInt(0), () => new Uint8Array([255, 255, 255, 255])), BigInt(2) ** BigInt(32));
+  assert.equal(bumpV7Field((BigInt(1) << BigInt(74)) - BigInt(1), zero), null);
+  assert.ok(randomV7Field(() => new Uint8Array(10).fill(255)) === (BigInt(1) << BigInt(74)) - BigInt(1));
+  // 74bitを使い切ったら時刻を1ミリ秒進めて取り直す（並びは保つ）
+  let calls = 0;
+  const rand = (n) => (n === 10 ? new Uint8Array(10).fill(calls++ === 0 ? 255 : 0) : new Uint8Array(n));
+  const two = generateIds({ type: 'uuid7', count: 2, time: 1000, rand }).ids;
+  assert.equal(decodeUuidV7(two[1]).time, 1001);
+  assert.ok(two[0] < two[1]);
+  // 読み戻し: v4 や不正な文字列は null、波括弧・大文字・ハイフンなしも読める
+  assert.equal(decodeUuidV7(generateIds({ type: 'uuid', count: 1 }).ids[0]), null);
+  assert.equal(decodeUuidV7('not-a-uuid'), null);
+  assert.equal(decodeUuidV7('{' + ids[0].toUpperCase().replace(/-/g, '') + '}').time, t);
+  // ツールの入口: 別名・timestamp・表記
+  const r7 = uuidGenerate({ type: 'v7', count: 5, timestamp: '2026-11-10T03:04:05.678Z', hyphens: false, uppercase: true });
+  assert.equal(r7.type, 'uuid7');
+  assert.equal(r7.version, 7);
+  assert.equal(r7.monotonic, true);
+  assert.equal(r7.timestamp.unix_ms, t);
+  assert.equal(r7.length, 32);
+  for (const id of r7.ids) assert.match(id, /^[0-9A-F]{12}7[0-9A-F]{3}[89AB][0-9A-F]{15}$/);
+  assert.deepEqual([...r7.ids].sort(), r7.ids);
+  const now = Date.now();
+  const rn = uuidGenerate({ type: 'uuid7' });
+  assert.ok(Math.abs(rn.timestamp.unix_ms - now) < 5000);
+  assert.match(rn.ids[0], /^[0-9a-f]{8}-[0-9a-f]{4}-7/);
+  assert.equal(uuidGenerate({ type: 'uuid7', count: 100 }).duplicates, 0);
+  console.log('uuid_generate (v7) ok');
 }
 
 

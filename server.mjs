@@ -919,34 +919,40 @@ registerTool(
 registerTool(
   'uuid_generate',
   {
-    title: 'UUID v4 / ULID の一括生成',
+    title: 'UUID v4 / UUID v7 / ULID の一括生成',
     description:
-      'UUID v4 または ULID を1〜100件まとめて生成する（tools.first-ch.com/uuid/ と同一の仕様）。' +
+      'UUID v4・UUID v7・ULID のいずれかを1〜100件まとめて生成する（tools.first-ch.com/uuid/ と同一の仕様）。' +
       'テストデータやマイグレーションの一意なIDの発行、DBのダミーレコード作成に使う。' +
       'UUID v4 は128bitのうち122bitが乱数（残る6bitがバージョン4とバリアント）で、順序を持たない。' +
       'ULID は26文字で、先頭10文字が生成時刻（UNIX時間のミリ秒・48bit）、後ろ16文字が乱数（80bit）。' +
-      '時刻が先頭にあるため文字列の辞書順が生成順と一致し、IDから作成日時を読み戻せる' +
+      'UUID v7（RFC 9562）は先頭48bitが生成時刻（UNIX時間のミリ秒）で、残りが ver・var と74bitの乱数。' +
+      'UUID と同じ36文字の形のまま時刻順に並ぶ。' +
+      'v7 と ULID は時刻が先頭にあるため文字列の辞書順が生成順と一致し、IDから作成日時を読み戻せる' +
       '（DBの主キーにするとB+treeインデックスの断片化を避けやすい。ただし生成時刻は誰にでも読める）。' +
-      '同一ミリ秒内に複数生成するときは ULID 仕様の単調増加（monotonic）に従って乱数部を+1するため、' +
+      '同一ミリ秒内に複数生成するときは、v7 は RFC 9562 §6.2 Method 2（乱数部を1〜2^32の乱数幅で進める）、' +
+      'ULID は仕様の単調増加（monotonic・乱数部を+1）に従うため、' +
       '100件を一度に作っても順序が崩れない。' +
       '乱数は node:crypto の randomBytes（CSPRNG）で、Math.random は使わない。' +
       'format で出力の形（1行1件 / JSON配列 / カンマ区切り / SQLのINSERT向けの引用符付き）を、' +
-      'uppercase・hyphens・braces で表記（UUIDの既定は RFC 9562 に従い小文字・ULIDの既定は大文字）を選べる。' +
+      'uppercase・hyphens・braces で表記（UUID〔v4・v7〕の既定は小文字・ULIDの既定は大文字）を選べる。' +
       '完全ローカル処理・ネットワーク送信なし。',
     inputSchema: {
-      type: z.enum(['uuid', 'ulid']).optional().describe("生成するIDの種類（既定: 'uuid' = UUID v4）"),
+      type: z
+        .enum(['uuid', 'uuid7', 'ulid'])
+        .optional()
+        .describe("生成するIDの種類（'uuid' = UUID v4 / 'uuid7' = UUID v7 / 'ulid'。既定: 'uuid'）"),
       count: z.number().int().optional().describe(`生成する件数（1〜${UUID_MAX_COUNT}。既定: 1）`),
       format: z
         .enum(['plain', 'json', 'csv', 'quoted'])
         .optional()
         .describe("text の出力形式（plain=1行1件 / json=JSON配列 / csv=カンマ区切り / quoted=\"…\", 。既定: plain）"),
       uppercase: z.boolean().optional().describe('大文字にするか（既定: UUIDは false・ULIDは true）'),
-      hyphens: z.boolean().optional().describe('UUIDのハイフンを残すか（false で32文字。既定: true。ULIDでは無視）'),
-      braces: z.boolean().optional().describe('UUIDを波括弧で括るか（WindowsのGUID表記。既定: false。ULIDでは無視）'),
+      hyphens: z.boolean().optional().describe('UUID（v4・v7）のハイフンを残すか（false で32文字。既定: true。ULIDでは無視）'),
+      braces: z.boolean().optional().describe('UUID（v4・v7）を波括弧で括るか（WindowsのGUID表記。既定: false。ULIDでは無視）'),
       timestamp: z
         .union([z.string(), z.number()])
         .optional()
-        .describe('ULIDに埋め込む時刻（ISO8601文字列 / UNIX秒 / UNIXミリ秒。既定: 現在時刻。UUIDでは指定できない）'),
+        .describe('UUID v7・ULIDに埋め込む時刻（ISO8601文字列 / UNIX秒 / UNIXミリ秒。既定: 現在時刻。UUID v4では指定できない）'),
     },
   },
   async (opts) => {

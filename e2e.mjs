@@ -482,6 +482,13 @@ try {
     assert.match(id, /^[0-9A-HJKMNP-TV-Z]{26}$/, `uuid_generate bad ulid: ${id}`);
   }
 
+  // UUID v7: 先頭48bitが時刻・同一ミリ秒の中でも辞書順＝生成順（RFC 9562 §6.2 Method 2）
+  const v7Res = await callTool('uuid_generate', { type: 'uuid7', count: 20, timestamp: '2026-11-10T03:04:05.678Z' }, 7001);
+  assert.equal(v7Res.version, 7, `uuid_generate v7 version: ${JSON.stringify(v7Res.version)}`);
+  assert.equal(v7Res.timestamp?.iso, '2026-11-10T03:04:05.678Z', `uuid_generate v7 timestamp: ${JSON.stringify(v7Res.timestamp)}`);
+  assert.deepEqual(v7Res.ids, [...v7Res.ids].sort(), `uuid v7 batch is not sorted: ${JSON.stringify(v7Res.ids)}`);
+  for (const id of v7Res.ids) assert.match(id, /^01a1c369-af2e-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, `uuid_generate bad v7: ${id}`);
+
   const uuidErr = await request('tools/call', { name: 'uuid_generate', arguments: { count: 1000 } }, 46);
   assert.ok(uuidErr.result?.isError, `uuid_generate should reject count > 100: ${JSON.stringify(uuidErr)}`);
 
