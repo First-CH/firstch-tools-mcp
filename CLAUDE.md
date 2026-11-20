@@ -7,6 +7,7 @@
 - `server.mjs` が MCP の入口、ツールは1機能1ファイル（`*.mjs`）。`apps.mjs` は apps.first-ch.com を呼ぶ `app_*` ツール（既定で無効）
 - `plugins/firstch-tools/.mcp.json` は npm の版を `@first-ch/tools-mcp@X.Y.Z` で固定して起動する。plugin 側に実装は置かない
 - 使い方・ツール一覧・プライバシーの正本は `README.md`（英日併記。ツールを足したら両方の表と `plugins/firstch-tools/README.md` を直す）
+- ツールを足したら `toolsets.mjs` のどれか1つのカテゴリにも入れ、`README.md` の英日のツールセット表（`FIRSTCH_TOOLSETS` の節）にも同じ順で足す。`server.mjs` の登録・`toolsets.mjs`・README の表の3つがずれると `npm test` が落ちる
 
 ## 検査（push 前に3つとも緑）とリリース
 
@@ -24,6 +25,7 @@ npm ci && npm test && node e2e.mjs   # 単体＋app_* のテスト（ネット�
 - アルゴリズムを変える変更はサイト側から始め、同じ変更をこちらに別コミットで反映する（こちらだけ先に変えない）
 - `marp-theme.css` はサイト側の `site/marp/theme-firstch.css` とバイト一致させる（`diff` で確認。`@auto-scaling`・`@size` を消さない）
 - `openapi-doc.mjs`・`lines.mjs`・`wiki-doc-lint.mjs` の「ここから〜ここまで」のコアは、サイト側の同名ツールと同一にする（照合コマンドは各ファイル冒頭）
+- `x-weight.mjs`（`count_chars` の `x_weight`）の「ここからウェイト計算コア〜ここまで」は、サイト側の `site/x-length/app.js` の同じ範囲と同一にする（照合の `diff` コマンドは同ファイル冒頭）。`npm test` は隣に `FirstCHTools` があるとき（または `FIRSTCH_TOOLS_REPO` で場所を指定したとき）だけ照合し、CI では飛ばすので、変えたら手元で必ず照合する
 - `vendor/jsquash-webp/` はサイト側と同じ `@jsquash/webp` の版を別々に固定している。片方だけ上げない
 
 ## 触らないもの

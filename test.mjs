@@ -5582,6 +5582,24 @@ components:
   assert.equal(isToolEnabled('app_meta_check', parseToolsets('apps').selected), true);
   // app_* の登録は FIRSTCH_ENABLE_APPS=1 が前提（ツールセットだけでは有効にならない）。server.mjs のその分岐を確かめる
   assert.match(src, /for \(const def of APPS_ENABLED \? APP_TOOLS : \[\]\)/);
+  // README（英・日）のツールセット表が TOOLSETS と同じ（ツールを足したとき表の直し忘れを止める）
+  const readme = readFileSync(new URL('./README.md', import.meta.url), 'utf8');
+  for (const [heading, sep] of [['### Toolsets (`FIRSTCH_TOOLSETS`)', ', '], ['#### ツールセット（`FIRSTCH_TOOLSETS`）', '・']]) {
+    const at = readme.indexOf(heading);
+    assert.ok(at >= 0, `README に見出しが無い: ${heading}`);
+    const rows = {};
+    for (const line of readme.slice(at).split('\n').slice(1)) {
+      if (rows.data && !line.startsWith('|')) break; // 表の終わり
+      const m = line.match(/^\| `([a-z]+)` \| (.+) \|$/);
+      if (m) rows[m[1]] = m[2];
+    }
+    assert.deepEqual(Object.keys(rows), TOOLSET_NAMES, `README の表の行がずれている: ${heading}`);
+    for (const name of TOOLSET_NAMES) {
+      if (name === 'apps') continue; // apps は説明文（app_* のすべて）
+      const tools = rows[name].split(sep).map((s) => s.replace(/^`|`$/g, ''));
+      assert.deepEqual(tools, TOOLSETS[name], `README の ${name} 行が toolsets.mjs とずれている: ${heading}`);
+    }
+  }
   console.log('toolsets ok');
 }
 
