@@ -5145,6 +5145,29 @@ components:
   assert.equal(en.terms[0].hits[0].after, 'Send an email.');
   // サイト側と同じ判定（コアは site/wiki-doc-lint/app.js と同一）
   assert.equal(wdlLint([{ path: 'a.md', text: 'ユーザビリティ' }]).stats.termHits, 0);
+  // サイト側の2つの直し: 名前での補完はリンク先と同じフォルダーの中だけ・修正案のパスの # と ? を符号化する
+  const wl = (pairs) => wdlLint(pairs.map(([path, text]) => ({ path, text })));
+  const moved = wl([
+    ['README.md', '# 目次\n[手順](old/guide.md)\n'],
+    ['new/guide.md', '# 手順\n'],
+  ]);
+  assert.deepEqual(moved.broken.map((b) => b.target), ['old/guide.md']);
+  const same = wl([
+    ['w/README.md', '# 目次\n[設定](設定.md)\n[手順](sub/Guide_Page.md)\n'],
+    ['w/設定 abcdefabcdefabcdefabcdefabcdefab.md', '# 設定\n'],
+    ['w/sub/guide page.md', '# 手順\n'],
+  ]);
+  assert.equal(same.broken.length, 0);
+  for (const [parentPath, parentText] of [['README.md', '# 目次\n'], ['index.html', '<h1>目次</h1>']]) {
+    const names = ['仕様#1.md', 'FAQ?.md', '50% (案).md', 'a#b?c.html'];
+    const pages = names.map((n) => [n, n.endsWith('.html') ? '<h1>x</h1>' : '# x\n']);
+    const r = wl([[parentPath, parentText], ...pages]);
+    assert.equal(r.orphans.length, names.length);
+    const added = r.orphans.map((o) => o.addLine).join('\n');
+    const again = wl([[parentPath, parentText + '\n' + added + '\n'], ...pages]);
+    assert.deepEqual(again.orphans, [], `${parentPath}: 修正案を足せば孤立が消える`);
+    assert.deepEqual(again.broken, [], `${parentPath}: 修正案のリンクは切れにならない`);
+  }
   // 壊れた引数
   await assert.rejects(() => wikiDocLintTool({}), WikiDocLintError);
   await assert.rejects(() => wikiDocLintTool({ paths: [root], files }), WikiDocLintError);
