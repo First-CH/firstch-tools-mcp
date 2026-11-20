@@ -5427,6 +5427,11 @@ components:
   assert.deepEqual(kinds('SATO HANAKO MARIE'), ['extra_word']);
   assert.deepEqual(kinds('佐藤 HANAKO'), ['nonlatin']);
   assert.deepEqual(kinds('ＳＡＴＯ　ＨＡＮＡＫＯ'), []);
+  // U⇄V は「似た字」（表の組は字の順に並べて引く）
+  assert.deepEqual(kinds('YVKA AI', 'YUKA', 'AI'), ['lookalike']);
+  // 姓か名の片方だけでも、同じつづりなら一致
+  assert.equal(romajiNameTool({ given: 'Junichi', documents: ['JUNICHI'] }).documents[0].verdict, 'match');
+  assert.equal(romajiNameTool({ surname: 'Sato', documents: ['SATO'] }).documents[0].verdict, 'match');
   const rv = romajiNameTool({ surname: 'SATO', given: 'HANAKO', documents: ['SATO HANAKO'], review: true, lang: 'en' });
   assert.equal(rv.documents[0].verdict, 'review');
   const st = romajiNameTool({ status: 'unknown', documents: ['SATO HANAKO'] });

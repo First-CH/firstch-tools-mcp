@@ -28,7 +28,7 @@ export const KIND_LABEL = {
     extra_word: 'Extra word (middle-name field etc.)', nonlatin: 'Non-Latin character',
   },
 };
-const LOOKALIKE = ['0O', '0Q', '0D', '1I', '1L', 'IL', '5S', '8B', '2Z', '6G', 'VU'];
+const LOOKALIKE = ['0O', '0Q', '0D', '1I', '1L', 'IL', '5S', '8B', '2Z', '6G', 'UV'];   // 各組は字の順に並べて書く（classify が並べ替えた2字で引く）
 const isSep = (c) => c === ' ' || c === '-';
 const isLatin = (c) => /^[A-Z0-9 '\-.]$/.test(c);
 
@@ -85,12 +85,14 @@ export function align(a, b) {
 }
 
 // 基準の文字列と、各文字が姓・名の何文字目か（空白・ハイフンは数えない）
+// 姓か名の片方が空なら、間の空白を置かずにもう片方だけを基準にする
 function baseLine(first, second, firstPart, secondPart) {
-  const text = first + ' ' + second;
+  const both = !!first && !!second;
+  const text = both ? first + ' ' + second : first + second;
   const where = [];
   let k = 0;
   for (const c of first) { where.push(isSep(c) ? null : { part: firstPart, pos: ++k }); }
-  where.push({ part: 'between', pos: 0 });
+  if (both) where.push({ part: 'between', pos: 0 });
   k = 0;
   for (const c of second) { where.push(isSep(c) ? null : { part: secondPart, pos: ++k }); }
   return { text, where };
