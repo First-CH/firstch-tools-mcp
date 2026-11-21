@@ -19,7 +19,7 @@ The server provides tools for, among others:
 - **Before you book a flight or apply for ESTA** — compare the name as printed in a passport with up to six spellings letter by letter, and see each difference named and placed (swapped names, space or hyphen, O vs U, N vs M before B/M/P, look-alike characters, titles mixed in)
 - **Planning time off together** — how many days two people with different days off are both off in 2027 (by month), and up to three breaks made with paid leave within each person's leave and a shared limit
 - **Internal docs** — near-duplicate pages, orphan pages, inconsistent or outdated terms and broken links in a wiki exported from Notion, Confluence and the like, with suggested fixes
-- **Developer utilities** — JSON ⇄ YAML, CSV/TSV ⇄ JSON, Markdown tables, SQL formatting, text/code diffing, cron explanation, Base64/data URIs, HTML escaping, hashing, JWT decoding, User-Agent parsing, UUID/ULID, Unix time, IP/CIDR calculation, business-day date calculation, case conversion, line operations (dedupe, sort, number), htpasswd generation for Basic auth, test data generation
+- **Developer utilities** — JSON ⇄ YAML, CSV/TSV ⇄ JSON, Markdown tables, SQL formatting, text/code diffing, cron explanation, Base64/data URIs, HTML escaping, hashing, JWT decoding, User-Agent parsing, UUID (v4/v7)/ULID, Unix time, IP/CIDR calculation, business-day date calculation, case conversion, line operations (dedupe, sort, number), htpasswd generation for Basic auth, test data generation
 
 All of the above run on your machine. In addition:
 
@@ -44,6 +44,11 @@ In Claude Code:
 
 - **Node.js 24 or later.** The plugin starts the server with `npx -y @first-ch/tools-mcp@<version>` (the version is pinned in this plugin's `.mcp.json`), so Node.js must be installed even if your Claude client itself does not need it. Older Node versions print an `EBADENGINE` warning, and refuse to start if npm's `engine-strict` is enabled.
 - PDF output from `marp_render` additionally needs a locally installed Chrome/Chromium; without one, it returns HTML only.
+
+## Limiting the tool list and workflow prompts
+
+- The server registers every local tool by default. Set `FIRSTCH_TOOLSETS` (comma-separated: `web`, `seo`, `ja`, `image`, `doc`, `dev`, `data`, `apps`) in the server's environment to register only those categories and keep the tool list short. `apps` has an effect only together with `FIRSTCH_ENABLE_APPS=1`. The category list is in the [repository README](https://github.com/First-CH/firstch-tools-mcp#toolsets-firstch_toolsets).
+- The server also offers MCP prompts (step-by-step recipes): `image_before_publish`, `reply_before_send`, `ja_copy_check`, and `prelaunch_site_check` (only with `FIRSTCH_ENABLE_APPS=1`). They hand the steps to Claude and run nothing by themselves.
 
 ## Example prompts
 

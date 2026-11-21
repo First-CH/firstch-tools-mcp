@@ -212,7 +212,9 @@ export function relPath(fromDir, toPath, type) {
   const segs = [];
   for (let k = i; k < a.length; k++) segs.push('..');
   for (let k = i; k < b.length; k++) segs.push(b[k]);
-  const enc = (s) => (type === 'html' ? s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') : s.replace(/%/g, '%25').replace(/ /g, '%20').replace(/\(/g, '%28').replace(/\)/g, '%29'));
+  // # と ? はそのままだとフラグメント・クエリとして読まれる
+  const url = (s) => s.replace(/%/g, '%25').replace(/#/g, '%23').replace(/\?/g, '%3F');
+  const enc = (s) => (type === 'html' ? url(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;') : url(s).replace(/ /g, '%20').replace(/\(/g, '%28').replace(/\)/g, '%29'));
   return segs.map(enc).join('/');
 }
 
@@ -640,7 +642,12 @@ export function resolveLink(link, from, docs, idx) {
   if (hasExt && !docExt) return null;
   const noExt = docExt ? target.replace(/\.[^./]+$/, '') : target;
   let hit = pickNear(idx.byNoExt.get(noExt), docs, fromDir);
-  if (hit < 0) hit = pickNear(idx.byName.get(nameKey(stemOf(target))), docs, fromDir);
+  if (hit < 0) {
+    // 名前での補完はリンク先と同じフォルダーの中だけ（別の場所の同名ページへ繋ぐとリンク切れを見逃す）
+    const tDir = dirOf(target);
+    const near = (idx.byName.get(nameKey(stemOf(target))) || []).filter((k) => dirOf(docs[k].path).toLowerCase() === tDir);
+    hit = pickNear(near, docs, fromDir);
+  }
   if (hit >= 0) return { to: hit };
   return docExt ? { broken: true } : null;
 }

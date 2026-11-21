@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // stdio E2E smoke test: spawns server.mjs as a child process and speaks minimal
 // JSON-RPC over stdin/stdout, asserting `initialize` succeeds, `tools/list`
-// returns all 47 local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
+// returns all local tools plus the app_* tools from apps.mjs when FIRSTCH_ENABLE_APPS=1 (the app_* calls go to a local fake
 // API via FIRSTCH_APPS_BASE_URL, never to the network), and `tools/call` actually executes handlers
 // (contrast_check / count_chars / marp_render / testdata_generate / diff_check / cron_explain /
 // base64_encode / url_params / html_escape / json_to_yaml / yaml_to_json / px_rem_convert /
@@ -178,8 +178,16 @@ try {
     assert.ok(!res.result?.isError, `${name} call errored: ${JSON.stringify(res)}`);
     const text = res.result?.content?.[0]?.text;
     assert.ok(text, `${name} returned no text content: ${JSON.stringify(res)}`);
-    return JSON.parse(text);
+    const parsed = JSON.parse(text);
+    // 結果がオブジェクトなら、同じ中身が structuredContent にも載る（text は古いクライアント向けにそのまま）
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      assert.deepEqual(res.result.structuredContent, parsed, `${name} structuredContent differs from text`);
+      structuredChecked.add(name);
+    }
+    assert.equal(res.result.content.length, 1, `${name} should return exactly one content block`);
+    return parsed;
   };
+  const structuredChecked = new Set();
 
   // encoding_convert: text だけでも呼べる（base64 は任意）
   const encText = await callTool('encoding_convert', { text: 'abc\r\n' }, 990);
@@ -481,6 +489,13 @@ try {
   for (const id of ulidRes.ids) {
     assert.match(id, /^[0-9A-HJKMNP-TV-Z]{26}$/, `uuid_generate bad ulid: ${id}`);
   }
+
+  // UUID v7: 先頭48bitが時刻・同一ミリ秒の中でも辞書順＝生成順（RFC 9562 §6.2 Method 2）
+  const v7Res = await callTool('uuid_generate', { type: 'uuid7', count: 20, timestamp: '2026-11-10T03:04:05.678Z' }, 7001);
+  assert.equal(v7Res.version, 7, `uuid_generate v7 version: ${JSON.stringify(v7Res.version)}`);
+  assert.equal(v7Res.timestamp?.iso, '2026-11-10T03:04:05.678Z', `uuid_generate v7 timestamp: ${JSON.stringify(v7Res.timestamp)}`);
+  assert.deepEqual(v7Res.ids, [...v7Res.ids].sort(), `uuid v7 batch is not sorted: ${JSON.stringify(v7Res.ids)}`);
+  for (const id of v7Res.ids) assert.match(id, /^01a1c369-af2e-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/, `uuid_generate bad v7: ${id}`);
 
   const uuidErr = await request('tools/call', { name: 'uuid_generate', arguments: { count: 1000 } }, 46);
   assert.ok(uuidErr.result?.isError, `uuid_generate should reject count > 100: ${JSON.stringify(uuidErr)}`);
@@ -992,26 +1007,98 @@ try {
   assert.match(JSON.stringify(appErr.result), /invalid_url/);
   assert.ok(appsRequests.some((r) => r.url === '/en/headers/api/inspect'), 'lang=en should call the /en/ API');
 
-  // 既定（FIRSTCH_ENABLE_APPS なし）では app_* を出さない＝入力を外へ送るツールは明示的に有効にしたときだけ
-  const plain = spawn(process.execPath, [join(here, 'server.mjs')], { stdio: ['pipe', 'pipe', 'inherit'], env: { ...process.env, FIRSTCH_ENABLE_APPS: '' } });
-  const plainNames = await new Promise((resolve, reject) => {
-    let out = '';
-    const timer = setTimeout(() => reject(new Error('timeout waiting for default tools/list')), 15000);
-    plain.stdout.on('data', (chunk) => {
-      out += chunk.toString('utf8');
-      for (const line of out.split('\n')) {
-        if (!line.trim()) continue;
-        let msg; try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.id === 2) { clearTimeout(timer); resolve((msg.result?.tools || []).map((t) => t.name)); }
-      }
+  // tools/call の結果: オブジェクトの結果は structuredContent にも同じ中身が載る。outputSchema は宣言しない
+  assert.ok(structuredChecked.size >= 40, `structuredContent checked on too few tools: ${structuredChecked.size}`);
+  assert.equal((listRes.result?.tools || []).filter((t) => t.outputSchema).length, 0, 'no tool should declare outputSchema');
+
+  // prompts（作業の手順書）: app_* を有効にした接続では4つとも出る。prompts の capability も出す
+  assert.ok(initRes.result.capabilities?.prompts, `prompts capability missing: ${JSON.stringify(initRes.result.capabilities)}`);
+  const promptsRes = await request('prompts/list', {}, 7101);
+  const promptNames = (promptsRes.result?.prompts || []).map((p) => p.name).sort();
+  assert.deepEqual(promptNames, ['image_before_publish', 'ja_copy_check', 'prelaunch_site_check', 'reply_before_send']);
+  const site = await request('prompts/get', { name: 'prelaunch_site_check', arguments: { url: 'https://example.com/' } }, 7102);
+  const siteText = site.result?.messages?.[0]?.content?.text || '';
+  assert.match(siteText, /https:\/\/example\.com\//, `prelaunch_site_check text: ${JSON.stringify(site)}`);
+  for (const t of ['app_meta_check', 'app_ssl', 'app_link_check', 'app_notice_check']) assert.ok(siteText.includes(t), `prelaunch_site_check should mention ${t}`);
+  // 手順に出てくる app_* は、どれも実在するツール名
+  for (const m of siteText.matchAll(/app_[a-z_]+/g)) assert.ok(names.includes(m[0]), `prelaunch_site_check mentions unknown tool ${m[0]}`);
+  const img = await request('prompts/get', { name: 'image_before_publish', arguments: { path: '/tmp/a.png' } }, 7103);
+  assert.match(img.result?.messages?.[0]?.content?.text || '', /kuronuri_tail[\s\S]*comfy_png_leak_scan[\s\S]*webp_convert/);
+  const rep = await request('prompts/get', { name: 'reply_before_send', arguments: { reply: '3月5日（火）に伺います' } }, 7104);
+  assert.match(rep.result?.messages?.[0]?.content?.text || '', /reply_check[\s\S]*3月5日（火）に伺います/);
+  const ja = await request('prompts/get', { name: 'ja_copy_check', arguments: { text: 'ﾃｽﾄ', limit: '140' } }, 7105);
+  assert.match(ja.result?.messages?.[0]?.content?.text || '', /count_chars[\s\S]*上限は 140[\s\S]*zenkaku_convert[\s\S]*ﾃｽﾄ/);
+  const badPrompt = await request('prompts/get', { name: 'reply_before_send', arguments: {} }, 7106);
+  assert.ok(badPrompt.error, `prompts/get without required args should fail: ${JSON.stringify(badPrompt)}`);
+
+  // 別の環境変数で起動し直して、tools/list・prompts/list と標準エラーを見る
+  const listWith = (env) =>
+    new Promise((resolve, reject) => {
+      const proc = spawn(process.execPath, [join(here, 'server.mjs')], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, FIRSTCH_ENABLE_APPS: '', FIRSTCH_TOOLSETS: '', ...env } });
+      let out = '';
+      let err = '';
+      const got = {};
+      const timer = setTimeout(() => { proc.kill(); reject(new Error(`timeout waiting for tools/list with ${JSON.stringify(env)}`)); }, 15000);
+      proc.stderr.on('data', (c) => (err += c.toString('utf8')));
+      proc.stdout.on('data', (chunk) => {
+        out += chunk.toString('utf8');
+        const lines = out.split('\n');
+        out = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const msg = JSON.parse(line);
+          got[msg.id] = msg;
+        }
+        if (got[1] && got[2] && got[3]) {
+          clearTimeout(timer);
+          proc.kill();
+          resolve({
+            capabilities: got[1].result?.capabilities || {},
+            tools: (got[2].result?.tools || []).map((t) => t.name),
+            prompts: got[3].error ? null : (got[3].result?.prompts || []).map((p) => p.name),
+            stderr: err,
+          });
+        }
+      });
+      const send = (m) => proc.stdin.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\n');
+      send({ id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'e2e-env', version: '0.0.0' } } });
+      send({ method: 'notifications/initialized' });
+      send({ id: 2, method: 'tools/list', params: {} });
+      send({ id: 3, method: 'prompts/list', params: {} });
     });
-    plain.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'e2e-default', version: '0.0.0' } } }) + '\n');
-    plain.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
-    plain.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }) + '\n');
-  });
-  plain.kill();
-  assert.ok(plainNames.length > 30, `default tools/list returned too few tools: ${plainNames.length}`);
-  assert.equal(plainNames.filter((n) => n.startsWith('app_')).length, 0, 'app_* tools must be opt-in (FIRSTCH_ENABLE_APPS=1)');
+
+  // 既定（FIRSTCH_ENABLE_APPS なし）では app_* を出さない＝入力を外へ送るツールは明示的に有効にしたときだけ
+  const plain = await listWith({});
+  assert.ok(plain.tools.length > 30, `default tools/list returned too few tools: ${plain.tools.length}`);
+  assert.equal(plain.tools.filter((n) => n.startsWith('app_')).length, 0, 'app_* tools must be opt-in (FIRSTCH_ENABLE_APPS=1)');
+  assert.deepEqual(plain.tools.sort(), names.filter((n) => !n.startsWith('app_')), 'default = every local tool');
+  assert.deepEqual(plain.prompts.sort(), ['image_before_publish', 'ja_copy_check', 'reply_before_send'], 'prelaunch_site_check needs app_*');
+
+  // FIRSTCH_TOOLSETS: カテゴリで絞る。知らない名前は標準エラーに警告して無視する
+  const image = await listWith({ FIRSTCH_TOOLSETS: 'image, bogus' });
+  assert.deepEqual(image.tools.sort(), ['comfy_png_leak_scan', 'dpi_calc', 'kuronuri_tail', 'webp_convert']);
+  assert.deepEqual(image.prompts, ['image_before_publish']);
+  assert.match(image.stderr, /FIRSTCH_TOOLSETS[^\n]*bogus/);
+  // ツールセットに apps を書いただけでは app_* は出ない（FIRSTCH_ENABLE_APPS=1 が要る）
+  const appsOnly = await listWith({ FIRSTCH_TOOLSETS: 'apps,dev' });
+  assert.equal(appsOnly.tools.filter((n) => n.startsWith('app_')).length, 0, 'toolsets alone must never enable app_*');
+  assert.ok(appsOnly.tools.includes('uuid_generate') && !appsOnly.tools.includes('count_chars'));
+  assert.match(appsOnly.stderr, /FIRSTCH_ENABLE_APPS=1/);
+  // 有効にしても、apps を選んでいなければ app_* は出ない／選べば出る
+  const webApps = await listWith({ FIRSTCH_TOOLSETS: 'web', FIRSTCH_ENABLE_APPS: '1' });
+  assert.equal(webApps.tools.filter((n) => n.startsWith('app_')).length, 0);
+  const withApps = await listWith({ FIRSTCH_TOOLSETS: 'apps', FIRSTCH_ENABLE_APPS: '1' });
+  assert.equal(withApps.tools.length, APP_TOOLS.length);
+  assert.ok(withApps.tools.every((n) => n.startsWith('app_')));
+  assert.deepEqual(withApps.prompts, ['prelaunch_site_check']);
+  // プロンプトが1つも無いときは prompts の capability を出さない
+  const dataOnly = await listWith({ FIRSTCH_TOOLSETS: 'data' });
+  assert.deepEqual(dataOnly.tools.sort(), ['csv_convert', 'json_to_yaml', 'testdata_generate', 'yaml_to_json']);
+  assert.equal(dataOnly.capabilities.prompts, undefined);
+  assert.equal(dataOnly.prompts, null, 'prompts/list should be unavailable without prompts');
+  // 知らない名前だけなら絞り込まない
+  const bogus = await listWith({ FIRSTCH_TOOLSETS: 'bogus' });
+  assert.equal(bogus.tools.length, plain.tools.length);
 
   console.log('e2e ok:', names.join(', '));
   fakeApps.close();
