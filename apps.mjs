@@ -564,6 +564,15 @@ const DEFS = [
       lang: LANG,
     },
   },
+  urlApp(
+    'sankou-url',
+    '/sankou-url/api/cite',
+    'そのWebページ、レポートの参考文献に書ける？ URLで3項目を判定',
+    'レポートで引用したいWebページを1回だけ取得し（先頭512KBまで）、題名（og:title → title）・著者（meta author → JSON-LD author）・運営者（og:site_name → JSON-LD publisher.name → 無ければホスト名で代わりに書く）・更新日（JSON-LD dateModified → article:modified_time → 本文の『更新日』『最終更新』の前後。西暦と令和だけを YYYY-MM-DD に）を、取れたか・取得元つきで返す。' +
+      '著者・運営者・更新日の3項目のうち取れた数（score）と判定（ok＝書ける／caution＝確かめれば書ける／hard＝このままでは書きにくい）、取れない項目ごとの一言、SIST 02 の並びの参考文献の1行（著者. “ページ名”. サイト名. 更新日. URL, (参照 YYYY-MM-DD).・取れない項目は［　］のまま）を返す。' +
+      '推測で埋めず、ページの良し悪しは判定しない。形式は授業・先生の指定が優先。ページの本文は返さない。同じIPから1分に10回まで（超えると HTTP 429）。',
+    { urlLabel: '引用したいWebページのURL' },
+  ),
 ];
 
 const toolName = (slug) => `app_${slug.replace(/-/g, '_')}`;

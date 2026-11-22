@@ -99,6 +99,9 @@ const jsonRes = (obj, status = 200, headers = {}) =>
   assert.ok(!parse('app_shashin_sozai_moto', { url: 'https://example.com/', offset: 5 }).success, 'offset は10の倍数');
   assert.ok(!parse('app_shashin_sozai_moto', { url: 'https://example.com/', offset: 30 }).success, 'offset は20まで');
   assert.ok(!parse('app_shashin_sozai_moto', { url: 'https://example.com/' + 'a'.repeat(2048) }).success, 'URL は2,048字まで');
+  assert.ok(parse('app_sankou_url', { url: 'https://example.com/', lang: 'ja' }).success);
+  assert.ok(!parse('app_sankou_url', { lang: 'ja' }).success, 'url は必須');
+  assert.ok(!parse('app_sankou_url', { url: 'https://example.com/' + 'a'.repeat(2048) }).success, 'URL は2,048字まで');
   assert.ok(parse('app_hp_sumaho_check', { url: 'https://example.com/', lang: 'ja' }).success);
   assert.ok(!parse('app_hp_sumaho_check', { lang: 'ja' }).success, 'url は必須');
   assert.ok(!parse('app_hp_sumaho_check', { url: 'https://example.com/' + 'a'.repeat(2048) }).success, 'URL は2,048字まで');
@@ -210,6 +213,7 @@ const jsonRes = (obj, status = 200, headers = {}) =>
     ['app_nap_check', { urls: ['https://example.com/', 'https://example.com/company/'] }, '/nap-check/api/check'],
     ['app_shuusei_irai_memo', { url: 'https://example.com/', old: '03-0123-4567', new: '03-0987-6543' }, '/shuusei-irai-memo/api/check'],
     ['app_hp_seisakuhi_url', { url: 'https://example.com/' }, '/hp-seisakuhi-url/api/parts'],
+    ['app_sankou_url', { url: 'https://example.com/' }, '/sankou-url/api/cite'],
     ['app_myip', {}, '/myip/api/info'],
   ];
   for (const [name, args, path] of cases) {
