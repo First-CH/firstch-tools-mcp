@@ -53,15 +53,17 @@ const jsonRes = (obj, status = 200, headers = {}) =>
     z.object(d.inputSchema);
     assert.ok([DEFAULT_TIMEOUT_MS, SLOW_TIMEOUT_MS].includes(d.timeoutMs));
   }
-  // AI を使う3本は回数制限を説明に書く
-  for (const n of ['app_tone_check', 'app_lp_persona_check', 'app_henji_kuru']) {
+  assert.equal(names.has('app_wp_check'), false);
+  assert.equal(names.has('app_henji_kuru'), false);
+  // AI を使う2本は回数制限を説明に書く
+  for (const n of ['app_tone_check', 'app_lp_persona_check']) {
     assert.equal(byName[n].ai, true);
     assert.match(byName[n].description, /回数制限あり/);
     assert.match(byName[n].description, /1日50回/);
     assert.match(byName[n].description, /10分に5回/);
     assert.equal(byName[n].timeoutMs, SLOW_TIMEOUT_MS, 'AI 側のタイムアウト45秒より長く待つ');
   }
-  assert.equal(APP_TOOLS.filter((d) => d.ai).length, 3);
+  assert.equal(APP_TOOLS.filter((d) => d.ai).length, 2);
   assert.match(byName.app_nap_check.description, /10分に10回/);
   assert.match(byName.app_redirect_map.description, /1分に60組/);
   assert.match(byName.app_lookalike_domain.description, /10分に30回/);
@@ -97,13 +99,6 @@ const jsonRes = (obj, status = 200, headers = {}) =>
   assert.ok(!parse('app_shashin_sozai_moto', { url: 'https://example.com/', offset: 5 }).success, 'offset は10の倍数');
   assert.ok(!parse('app_shashin_sozai_moto', { url: 'https://example.com/', offset: 30 }).success, 'offset は20まで');
   assert.ok(!parse('app_shashin_sozai_moto', { url: 'https://example.com/' + 'a'.repeat(2048) }).success, 'URL は2,048字まで');
-  assert.ok(parse('app_henji_kuru', { lines: [{ text: '私も', context: '○2' }], count: true }).success);
-  assert.ok(parse('app_henji_kuru', { lines: [{ text: '前の件は欠席' }], lang: 'en' }).success, 'context と count は省ける');
-  assert.ok(!parse('app_henji_kuru', {}).success, 'lines は必須');
-  assert.ok(!parse('app_henji_kuru', { lines: [] }).success, 'lines は1件以上');
-  assert.ok(!parse('app_henji_kuru', { lines: new Array(11).fill({ text: '私も' }) }).success, 'lines は10件まで');
-  assert.ok(!parse('app_henji_kuru', { lines: [{ text: 'あ'.repeat(301) }] }).success, '本文は300字まで');
-  assert.ok(!parse('app_henji_kuru', { lines: [{ text: '私も', context: 'あ'.repeat(301) }] }).success, '直前の発言は300字まで');
   assert.ok(parse('app_hp_sumaho_check', { url: 'https://example.com/', lang: 'ja' }).success);
   assert.ok(!parse('app_hp_sumaho_check', { lang: 'ja' }).success, 'url は必須');
   assert.ok(!parse('app_hp_sumaho_check', { url: 'https://example.com/' + 'a'.repeat(2048) }).success, 'URL は2,048字まで');
@@ -341,9 +336,12 @@ const jsonRes = (obj, status = 200, headers = {}) =>
     // APPS 配列の各要素の slug と apiPath を出現順に拾う
     const list = src.slice(src.indexOf('export const APPS'));
     const registry = [];
-    const re = /slug:\s*"([^"]+)"[\s\S]*?apiPath:\s*"([^"]+)"/g;
-    let m;
-    while ((m = re.exec(list))) registry.push({ slug: m[1], apiPath: m[2] });
+    for (const entry of list.split(/^  \{\s*$/m).slice(1)) {
+      const slug = entry.match(/^    slug:\s*"([^"]+)"/m)?.[1];
+      const apiPath = entry.match(/^    apiPath:\s*"([^"]+)"/m)?.[1];
+      // ブラウザで完結するアプリと、MCP で提供しない WordPress 診断を除く。
+      if (slug && apiPath && slug !== 'wp-check') registry.push({ slug, apiPath });
+    }
     assert.ok(registry.length >= 30, `registry の読み取りに失敗: ${registry.length} 件`);
     assert.deepEqual(
       APP_TOOLS.map((d) => ({ slug: d.slug, apiPath: d.apiPath })),

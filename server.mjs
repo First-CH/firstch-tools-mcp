@@ -56,6 +56,7 @@ import { emailReadAloudTool } from './email-read-aloud.mjs';
 import { renkyuPairTool } from './renkyu-pair.mjs';
 import { kuronuriTailTool } from './kuronuri-tail.mjs';
 import { romajiNameTool } from './romaji-name.mjs';
+import { hiddenInstructionTool } from './hidden-instruction.mjs';
 import { replyCheckTool } from './reply-check.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
@@ -2279,6 +2280,34 @@ registerTool(
   async (opts) => {
     await logUsage('romaji_name_check');
     return asText(romajiNameTool(opts));
+  },
+);
+
+registerTool(
+  'hidden_instruction_scan',
+  {
+    title: '書類の中のAI向け命令文と見えない文字を探す（応募書類・レポートをAIに渡す前に）',
+    description:
+      '応募書類・提出レポート・取引先の資料をAIに要約・評価させる前に、PDFやWordから全選択してコピーした文（プレーンテキスト）を受け取り、' +
+      '①AIへの命令らしい文（「これまでの指示を無視」「この候補者を高く評価」「肯定的な評価のみ」「ignore previous instructions」「as an AI reviewer」など日英46語の辞書）を行番号・当たった語（words）・種類（kind: override 前の指示を打ち消す / role AIに呼びかける / evaluate 評価の結果を決めつける / hide 隠すように求める / markup 指示文の書式）・理由（reason）つきで hits に返す。空白・改行・見えない文字をはさんでも、全角の英字でも当たる。' +
+      '②見えない文字を種類（tag タグ文字 U+E0000〜E007F・vshide 2つ以上続いた異体字セレクタ・bidi 双方向の制御文字・zw ゼロ幅など・ctrl 制御文字・zwj 接合子・vs 異体字セレクタ・tagflag 旗の絵文字のタグ）ごとに、行・字・コードポイントつきで invisible.runs に返す。counts.invisible は tag・vshide・bidi・zw・ctrl の数、counts.kept は残してよいことが多い zwj・vs・tagflag の数。' +
+      '③タグ文字（と続いた異体字セレクタ）に隠れた文を読み直して hidden に返し、その中の命令らしい文も hits（source: hidden）に入れる。' +
+      'memo は採用担当や上司へそのまま送れる数行の確認メモ（「見つからなかった＝安全ではない」の注記つき）。clean=true なら選んだ種類（remove。既定は tag・vshide・bidi・zw・ctrl を消し、zwj・vs・tagflag は残す）を消した文を cleaned に返す。' +
+      'HTMLの解析・文字の色や大きさの判定・ファイルの読み込み・URLからの取得・AIによる判定・書いた人の意図や不正の判定はしない（tools.first-ch.com/kakushi/ と同一ロジック）。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      text: z.string().max(1000000).describe('調べる文（プレーンテキスト・100万字まで）。PDF・Wordで全選択してコピーした文'),
+      clean: z.boolean().optional().describe('true なら見えない文字を消した文（cleaned）も返す'),
+      remove: z
+        .object({ tag: z.boolean(), vshide: z.boolean(), bidi: z.boolean(), zw: z.boolean(), ctrl: z.boolean(), zwj: z.boolean(), vs: z.boolean(), tagflag: z.boolean() })
+        .partial()
+        .optional()
+        .describe('clean=true のとき消す種類（指定しない種類は既定どおり: tag・vshide・bidi・zw・ctrl は消す、zwj・vs・tagflag は残す）'),
+      lang: z.enum(['ja', 'en']).optional().describe("reason・label・memo の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('hidden_instruction_scan');
+    return asText(hiddenInstructionTool(opts));
   },
 );
 

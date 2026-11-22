@@ -25,7 +25,7 @@ export const TOOLSETS = {
   image: ['webp_convert', 'comfy_png_leak_scan', 'kuronuri_tail', 'dpi_calc'],
   doc: [
     'marp_render', 'html_to_markdown', 'markdown_table', 'openapi_doc_generate', 'wiki_doc_lint',
-    'diff_check', 'lines_process',
+    'diff_check', 'lines_process', 'hidden_instruction_scan',
   ],
   dev: [
     'cron_explain', 'base64_encode', 'hash_generate', 'jwt_decode', 'uuid_generate', 'sql_format',
