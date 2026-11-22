@@ -36,7 +36,7 @@ import {
 } from './jwt.mjs';
 import {
   uuidGenerate, generateIds, formatIds, uuidV4FromBytes, encodeUlidTime, encodeUlidRandom,
-  bumpUlidRandom, decodeUlid, UuidError,
+  bumpUlidRandom, decodeUlid, UuidError, uuidV7FromParts, randomV7Field, bumpV7Field, decodeUuidV7,
 } from './uuid.mjs';
 import {
   aspectRatioCalc, arGcd, arFormat, arSimplify, arApprox, arNearestPreset, arParseRatio,
@@ -132,6 +132,57 @@ assert.equal(url.x_postable, true);
 const over = countChars('あ'.repeat(141));
 assert.equal(over.x_weight, 282);
 assert.equal(over.x_postable, false);
+
+// count_chars の x_weight は site/x-length/app.js のウェイト計算コア（x-weight.mjs）と同じ値になる。
+// 期待値はサイト側の検査（tests/moji.test.mjs）と同じ表＝ npm の twitter-text 3.1.0 の weightedLength。
+{
+  const { measure } = await import('./x-weight.mjs');
+  const cases = [
+    ['あ'.repeat(140), 280], ['あ'.repeat(141), 282], ['a'.repeat(280), 280], ['a'.repeat(281), 281],
+    ['あ'.repeat(128) + ' https://tools.first-ch.com/moji/?utm_source=x&utm_medium=social', 280],
+    ['https://example.com/' + 'x'.repeat(200), 23], ['example.com を見て', 30], ['tools.first-ch.com/moji/', 23],
+    ['👨‍👩‍👦', 2], ['🇯🇵', 2], ['1️⃣', 2], ['👍🏽', 2], ['ガ', 2], ['ガ', 2], ['é', 1], ['café', 4],
+    ['@first_ch こんにちは', 20], ['こんにちは @first_ch', 20], ['#文字数カウント', 15], ['#Webツール test', 15],
+    ['Hello, world', 12], ['“quoted” — dash…', 17], ['Ａ１。、「」', 12], ['한국어', 6], ['Привет мир', 10],
+    ['line1\nline2\r\n', 13],
+    // ここから下はサイトの About の実例表と、URL の後ろの和文括弧・句点を URL に含めない確認（サイトの実装で出した値）
+    ['https://tools.first-ch.com/moji/?utm_source=x', 23], ['文字数カウント', 14],
+    ['見て（example.com）', 31], ['example.com。', 25],
+  ];
+  for (const [s, w] of cases) {
+    assert.equal(measure(s, 280).weight, w, JSON.stringify(s));
+    assert.equal(countChars(s).x_weight, w, 'count_chars: ' + JSON.stringify(s));
+  }
+  assert.equal(countChars('example.com を見て').x_urls, 1);
+  assert.equal(countChars('a.b を見て').x_urls, 0);
+
+  // サイト側の正本と、コアの範囲が字下げ・export を除いて同一か（隣に FirstCHTools があるときだけ）
+  const { existsSync, readFileSync } = await import('node:fs');
+  const { join, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const site = [process.env.FIRSTCH_TOOLS_REPO, join(here, '..', 'FirstCHTools'), join(here, '..', 'firstchtools')]
+    .filter(Boolean)
+    .map((p) => join(p, 'site', 'x-length', 'app.js'))
+    .find((p) => existsSync(p));
+  const core = (src, strip) => {
+    const lines = src.split('\n');
+    const a = lines.findIndex((l) => /^ *\/\* =* ここからウェイト計算コア/.test(l));
+    const b = lines.findIndex((l) => /^ *\/\* =* ここまでウェイト計算コア/.test(l));
+    assert.ok(a !== -1 && b > a, 'ウェイト計算コアの目印が見つからない');
+    return lines.slice(a, b + 1).map(strip).join('\n');
+  };
+  if (!site) {
+    console.log('  skip - x-weight.mjs と site/x-length/app.js の突合（FirstCHTools が見つからない。FIRSTCH_TOOLS_REPO で場所を指定できる）');
+  } else {
+    assert.equal(
+      core(readFileSync(join(here, 'x-weight.mjs'), 'utf8'), (l) => l.replace(/^export /, '')),
+      core(readFileSync(site, 'utf8'), (l) => l.replace(/^  /, '')),
+      'x-weight.mjs のウェイト計算コアが site/x-length/app.js と違う',
+    );
+    console.log('  ok - x-weight.mjs のコアは site/x-length/app.js と同一');
+  }
+}
 
 // llmstxt_generate: サイトのフォーム出力（site/llms-txt/app.js）と同一形式
 {
@@ -2242,13 +2293,70 @@ assert.equal(over.x_postable, false);
   assert.deepEqual(big.ids, [...big.ids].sort());
 
   // 不正な引数は UuidError
-  assert.throws(() => uuidGenerate({ type: 'uuid7' }), UuidError);
+  assert.throws(() => uuidGenerate({ type: 'uuid8' }), UuidError);
   assert.throws(() => uuidGenerate({ count: 0 }), UuidError);
   assert.throws(() => uuidGenerate({ count: 101 }), UuidError);
   assert.throws(() => uuidGenerate({ count: 1.5 }), UuidError);
   assert.throws(() => uuidGenerate({ format: 'xml' }), UuidError);
   assert.throws(() => uuidGenerate({ type: 'uuid', timestamp: '2026-08-18' }), UuidError);
   assert.throws(() => uuidGenerate({ type: 'ulid', timestamp: 'yesterday' }), UuidError);
+}
+
+// ==================== uuid_generate（UUID v7） ====================
+{
+  // 構造: 先頭48bitが時刻・13文字目が7・17文字目が8〜b（RFC 9562 §5.7）
+  const t = Date.UTC(2026, 10, 10, 3, 4, 5, 678);
+  const { ids } = generateIds({ type: 'uuid7', count: 100, time: t });
+  for (const id of ids) {
+    assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    assert.equal(decodeUuidV7(id).time, t);
+  }
+  // 同じミリ秒の100件でも文字列の昇順＝作った順（単調増加）・重複なし
+  assert.deepEqual([...ids].sort(), ids);
+  assert.equal(new Set(ids).size, 100);
+  // 境界値（site/uuid/app.js の uuidV7FromParts で出した値と同じ）
+  assert.equal(uuidV7FromParts(0, BigInt(0)), '00000000-0000-7000-8000-000000000000');
+  assert.equal(uuidV7FromParts(281474976710655, (BigInt(1) << BigInt(74)) - BigInt(1)), 'ffffffff-ffff-7fff-bfff-ffffffffffff');
+  assert.throws(() => uuidV7FromParts(-1, BigInt(0)), UuidError);
+  // 決め打ちの乱数で、site/uuid/app.js の generateIds と同じ3件になる
+  let k = 0;
+  const seq = (n) => Uint8Array.from({ length: n }, () => (k++ * 37 + 11) & 255);
+  assert.deepEqual(generateIds({ type: 'uuid7', count: 3, time: 1794279845678, rand: seq }).ids, [
+    '01a1c369-af2e-7cc1-957a-9fc4e90e3358',
+    '01a1c369-af2e-7cc1-957a-9fc566b0fb45',
+    '01a1c369-af2e-7cc1-957a-9fc577e756c6',
+  ]);
+  // 進め方: 1〜2^32 の幅で進め、74bitを超えたら null
+  const zero = () => new Uint8Array(4);
+  assert.equal(bumpV7Field(BigInt(5), zero), BigInt(6));
+  assert.equal(bumpV7Field(BigInt(0), () => new Uint8Array([255, 255, 255, 255])), BigInt(2) ** BigInt(32));
+  assert.equal(bumpV7Field((BigInt(1) << BigInt(74)) - BigInt(1), zero), null);
+  assert.ok(randomV7Field(() => new Uint8Array(10).fill(255)) === (BigInt(1) << BigInt(74)) - BigInt(1));
+  // 74bitを使い切ったら時刻を1ミリ秒進めて取り直す（並びは保つ）
+  let calls = 0;
+  const rand = (n) => (n === 10 ? new Uint8Array(10).fill(calls++ === 0 ? 255 : 0) : new Uint8Array(n));
+  const two = generateIds({ type: 'uuid7', count: 2, time: 1000, rand }).ids;
+  assert.equal(decodeUuidV7(two[1]).time, 1001);
+  assert.ok(two[0] < two[1]);
+  // 読み戻し: v4 や不正な文字列は null、波括弧・大文字・ハイフンなしも読める
+  assert.equal(decodeUuidV7(generateIds({ type: 'uuid', count: 1 }).ids[0]), null);
+  assert.equal(decodeUuidV7('not-a-uuid'), null);
+  assert.equal(decodeUuidV7('{' + ids[0].toUpperCase().replace(/-/g, '') + '}').time, t);
+  // ツールの入口: 別名・timestamp・表記
+  const r7 = uuidGenerate({ type: 'v7', count: 5, timestamp: '2026-11-10T03:04:05.678Z', hyphens: false, uppercase: true });
+  assert.equal(r7.type, 'uuid7');
+  assert.equal(r7.version, 7);
+  assert.equal(r7.monotonic, true);
+  assert.equal(r7.timestamp.unix_ms, t);
+  assert.equal(r7.length, 32);
+  for (const id of r7.ids) assert.match(id, /^[0-9A-F]{12}7[0-9A-F]{3}[89AB][0-9A-F]{15}$/);
+  assert.deepEqual([...r7.ids].sort(), r7.ids);
+  const now = Date.now();
+  const rn = uuidGenerate({ type: 'uuid7' });
+  assert.ok(Math.abs(rn.timestamp.unix_ms - now) < 5000);
+  assert.match(rn.ids[0], /^[0-9a-f]{8}-[0-9a-f]{4}-7/);
+  assert.equal(uuidGenerate({ type: 'uuid7', count: 100 }).duplicates, 0);
+  console.log('uuid_generate (v7) ok');
 }
 
 
@@ -5037,6 +5145,29 @@ components:
   assert.equal(en.terms[0].hits[0].after, 'Send an email.');
   // サイト側と同じ判定（コアは site/wiki-doc-lint/app.js と同一）
   assert.equal(wdlLint([{ path: 'a.md', text: 'ユーザビリティ' }]).stats.termHits, 0);
+  // サイト側の2つの直し: 名前での補完はリンク先と同じフォルダーの中だけ・修正案のパスの # と ? を符号化する
+  const wl = (pairs) => wdlLint(pairs.map(([path, text]) => ({ path, text })));
+  const moved = wl([
+    ['README.md', '# 目次\n[手順](old/guide.md)\n'],
+    ['new/guide.md', '# 手順\n'],
+  ]);
+  assert.deepEqual(moved.broken.map((b) => b.target), ['old/guide.md']);
+  const same = wl([
+    ['w/README.md', '# 目次\n[設定](設定.md)\n[手順](sub/Guide_Page.md)\n'],
+    ['w/設定 abcdefabcdefabcdefabcdefabcdefab.md', '# 設定\n'],
+    ['w/sub/guide page.md', '# 手順\n'],
+  ]);
+  assert.equal(same.broken.length, 0);
+  for (const [parentPath, parentText] of [['README.md', '# 目次\n'], ['index.html', '<h1>目次</h1>']]) {
+    const names = ['仕様#1.md', 'FAQ?.md', '50% (案).md', 'a#b?c.html'];
+    const pages = names.map((n) => [n, n.endsWith('.html') ? '<h1>x</h1>' : '# x\n']);
+    const r = wl([[parentPath, parentText], ...pages]);
+    assert.equal(r.orphans.length, names.length);
+    const added = r.orphans.map((o) => o.addLine).join('\n');
+    const again = wl([[parentPath, parentText + '\n' + added + '\n'], ...pages]);
+    assert.deepEqual(again.orphans, [], `${parentPath}: 修正案を足せば孤立が消える`);
+    assert.deepEqual(again.broken, [], `${parentPath}: 修正案のリンクは切れにならない`);
+  }
   // 壊れた引数
   await assert.rejects(() => wikiDocLintTool({}), WikiDocLintError);
   await assert.rejects(() => wikiDocLintTool({ paths: [root], files }), WikiDocLintError);
@@ -5440,6 +5571,92 @@ components:
   assert.throws(() => romajiNameTool({ surname: 'A', status: 'x' }), (e) => e.code === 'BAD_STATUS');
   assert.throws(() => romajiNameTool({ surname: 'A', documents: Array(7).fill('A') }), (e) => e.code === 'TOO_MANY');
   console.log('romaji_name_check ok');
+}
+
+// ==================== ツールセット（FIRSTCH_TOOLSETS） ====================
+{
+  const { TOOLSETS, TOOLSET_NAMES, toolsetOf, parseToolsets, isToolEnabled } = await import('./toolsets.mjs');
+  const { readFileSync } = await import('node:fs');
+  // server.mjs で登録している端末内のツールが、どれか1つのカテゴリにだけ入っている
+  const src = readFileSync(new URL('./server.mjs', import.meta.url), 'utf8');
+  const registered = [...src.matchAll(/^registerTool\(\n {2}'([a-z0-9_]+)'/gm)].map((m) => m[1]);
+  assert.ok(registered.length >= 50, `server.mjs の登録の読み取りに失敗: ${registered.length} 件`);
+  const assigned = Object.values(TOOLSETS).flat();
+  assert.equal(new Set(assigned).size, assigned.length, 'カテゴリをまたいで重複しているツールがある');
+  assert.deepEqual([...assigned].sort(), [...registered].sort(), 'toolsets.mjs と server.mjs の登録がずれている');
+  for (const name of registered) assert.notEqual(toolsetOf(name), null, name);
+  assert.equal(toolsetOf('app_meta_check'), 'apps');
+  assert.equal(toolsetOf('no_such_tool'), null);
+  assert.deepEqual(TOOLSET_NAMES, ['web', 'seo', 'ja', 'image', 'doc', 'dev', 'data', 'apps']);
+  // 読み方: 未設定・空は絞り込まない。空白・大文字小文字は問わない。知らない名前は unknown に出す
+  assert.deepEqual(parseToolsets(undefined), { selected: null, unknown: [] });
+  assert.deepEqual(parseToolsets(' , '), { selected: null, unknown: [] });
+  const p = parseToolsets(' Web, seo ,bogus');
+  assert.deepEqual([...p.selected], ['web', 'seo']);
+  assert.deepEqual(p.unknown, ['bogus']);
+  assert.deepEqual(parseToolsets('bogus'), { selected: null, unknown: ['bogus'] });
+  // 絞り込み
+  const only = (v) => registered.filter((n) => isToolEnabled(n, parseToolsets(v).selected));
+  assert.deepEqual(only(undefined).sort(), [...registered].sort());
+  assert.deepEqual(only('image').sort(), ['comfy_png_leak_scan', 'dpi_calc', 'kuronuri_tail', 'webp_convert']);
+  assert.equal(only('web,seo').length, TOOLSETS.web.length + TOOLSETS.seo.length);
+  assert.deepEqual(only('apps'), [], 'apps だけなら端末内のツールは出さない');
+  assert.equal(isToolEnabled('app_meta_check', parseToolsets('web').selected), false);
+  assert.equal(isToolEnabled('app_meta_check', parseToolsets('apps').selected), true);
+  // app_* の登録は FIRSTCH_ENABLE_APPS=1 が前提（ツールセットだけでは有効にならない）。server.mjs のその分岐を確かめる
+  assert.match(src, /for \(const def of APPS_ENABLED \? APP_TOOLS : \[\]\)/);
+  // README（英・日）のツールセット表が TOOLSETS と同じ（ツールを足したとき表の直し忘れを止める）
+  const readme = readFileSync(new URL('./README.md', import.meta.url), 'utf8');
+  for (const [heading, sep] of [['### Toolsets (`FIRSTCH_TOOLSETS`)', ', '], ['#### ツールセット（`FIRSTCH_TOOLSETS`）', '・']]) {
+    const at = readme.indexOf(heading);
+    assert.ok(at >= 0, `README に見出しが無い: ${heading}`);
+    const rows = {};
+    for (const line of readme.slice(at).split('\n').slice(1)) {
+      if (rows.data && !line.startsWith('|')) break; // 表の終わり
+      const m = line.match(/^\| `([a-z]+)` \| (.+) \|$/);
+      if (m) rows[m[1]] = m[2];
+    }
+    assert.deepEqual(Object.keys(rows), TOOLSET_NAMES, `README の表の行がずれている: ${heading}`);
+    for (const name of TOOLSET_NAMES) {
+      if (name === 'apps') continue; // apps は説明文（app_* のすべて）
+      const tools = rows[name].split(sep).map((s) => s.replace(/^`|`$/g, ''));
+      assert.deepEqual(tools, TOOLSETS[name], `README の ${name} 行が toolsets.mjs とずれている: ${heading}`);
+    }
+  }
+  console.log('toolsets ok');
+}
+
+// ==================== プロンプト（作業の手順書） ====================
+{
+  const { PROMPTS, availablePrompts } = await import('./prompts.mjs');
+  const { TOOLSETS } = await import('./toolsets.mjs');
+  const { APP_TOOLS } = await import('./apps.mjs');
+  const local = new Set(Object.values(TOOLSETS).flat());
+  const all = new Set([...local, ...APP_TOOLS.map((d) => d.name)]);
+  assert.deepEqual(PROMPTS.map((p) => p.name), ['prelaunch_site_check', 'image_before_publish', 'reply_before_send', 'ja_copy_check']);
+  for (const p of PROMPTS) {
+    // requires は実在するツール。手順の文面に出てくるツール名も実在し、requires に入っている
+    for (const n of p.requires) assert.ok(all.has(n), `${p.name}: unknown tool ${n}`);
+    const args = Object.fromEntries(Object.keys(p.argsSchema).map((k) => [k, 'ARG_' + k]));
+    const msg = p.build(args);
+    assert.equal(msg.messages.length, 1);
+    assert.equal(msg.messages[0].role, 'user');
+    const t = msg.messages[0].content.text;
+    for (const m of t.matchAll(/\b([a-z]+(?:_[a-z]+)+)\b/g)) {
+      if (all.has(m[1])) assert.ok(p.requires.includes(m[1]), `${p.name} mentions ${m[1]} but does not require it`);
+    }
+    for (const k of Object.keys(p.argsSchema)) assert.ok(t.includes('ARG_' + k), `${p.name}: argument ${k} not in text`);
+    // 公開リポジトリ: 手順の文面は一般的な内容だけ（社内の URL やパスを書かない）
+    assert.doesNotMatch(t, /https?:\/\/(?!apps\.first-ch\.com)/);
+  }
+  // 端末内のツールだけなら prelaunch_site_check は出ない。app_* があれば出る
+  assert.deepEqual(availablePrompts(local).map((p) => p.name), ['image_before_publish', 'reply_before_send', 'ja_copy_check']);
+  assert.equal(availablePrompts(all).length, 4);
+  assert.deepEqual(availablePrompts(new Set(TOOLSETS.data)), []);
+  // 省略できる引数が無くても文面が作れる
+  assert.match(PROMPTS[2].build({ reply: 'x' }).messages[0].content.text, /（なし）/);
+  assert.doesNotMatch(PROMPTS[3].build({ text: 'x' }).messages[0].content.text, /上限は undefined/);
+  console.log('prompts ok');
 }
 
 console.log('all tests passed');
