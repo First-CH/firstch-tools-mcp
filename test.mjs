@@ -207,7 +207,7 @@ assert.equal(over.x_postable, false);
   const g = llmsTxtTool({
     siteName: 'Ex',
     sections: [
-      { title: 'Docs', links: [{ title: 'A [b]', url: 'https://e.com/a (1)' }, { title: 'dup', url: 'https://E.com/a%20%281%29' }, { title: 'bad', url: 'e.com/x' }] },
+      { title: 'Docs', links: [{ title: 'A [b]', url: 'https://e.com/a (1)' }, { title: 'dup', url: 'https://E.com/a%20%281%29' }, { title: 'bad', url: 'javascript:alert(1)' }, { title: 'rel', url: 'docs/a.md' }] },
       { title: 'Optional', links: [] },
     ],
     importText: '<urlset><url><loc>https://e.com/blog/one/</loc></url><url><loc>https://e.com/blog/two/</loc></url><url><loc>https://e.com/about/</loc></url></urlset>',
@@ -217,7 +217,9 @@ assert.equal(over.x_postable, false);
   assert.match(g.text, /^- \[A \\\[b\\\]\]\(https:\/\/e\.com\/a%20%281%29\)$/m);
   assert.deepEqual(g.text.match(/^## .*$/gm), ['## Docs', '## Blog']);
   assert.match(g.text, /- \[About\]\(https:\/\/e\.com\/about\/\)/);
-  assert.deepEqual(g.warnings.map((w) => w.code), ['encoded', 'dupUrl', 'invalid']);
+  assert.deepEqual(g.warnings.map((w) => w.code), ['encoded', 'dupUrl', 'unsafe', 'relative']);
+  assert.match(g.text, /- \[rel\]\(docs\/a\.md\)/, '相対 URL は従来どおり出力する');
+  assert.ok(!g.text.includes('javascript:'));
   assert.ok(g.warnings.every((w) => w.message && !w.message.includes('{')));
   assert.deepEqual(g.imported, { kind: 'sitemap', count: 3, guessedTitles: 3, skipped: [], truncated: 0 });
   const idx = llmsTxtTool({ siteName: 'Ex', importText: '<sitemapindex><sitemap><loc>https://e.com/s1.xml</loc></sitemap></sitemapindex>' });
@@ -229,6 +231,15 @@ assert.equal(over.x_postable, false);
   assert.deepEqual(lint.issues.map((i) => `${i.line}:${i.code}`), ['2:h1NotFirst', '2:noSummary', '7:noteFormat', '7:dupLink', '8:itemNoLink']);
   assert.ok(lint.issues.every((i) => i.message && !i.message.includes('{')));
   assert.equal(llmsTxtTool({ text: '# T\n\n> s\n\n## A\n\n- [x](https://e.com/)\n' }).issues.length, 0);
+  assert.throws(() => llmsTxtTool({ sections: [] }), /siteName/);
+  const both = llmsTxtTool({ siteName: 'S', text: '# x' });
+  assert.equal(both.mode, 'generate');
+  assert.match(both.notice, /mode="lint"/);
+  const opt = llmsTxtTool({ siteName: 'S', sections: [{ title: 'Docs', links: [] }, { title: 'Optional', links: [] }], importText: 'https://e.com/a/', importSection: 'optional' });
+  assert.match(opt.text, /## Optional\n\n- \[A\]/);
+  assert.ok(!/## optional/.test(opt.text));
+  const opt2 = llmsTxtTool({ siteName: 'S', importText: 'https://e.com/a/', importSection: 'OPTIONAL' });
+  assert.match(opt2.text, /^## Optional$/m);
 }
 
 // jsonld_generate: サイトのフォーム出力（site/jsonld/app.js）と同一形式・空項目は省略

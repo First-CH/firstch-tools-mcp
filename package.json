@@ -300,6 +300,7 @@
     "romaji-name.mjs",
     "hidden-instruction.mjs",
     "reply-check.mjs",
+    "llms-txt.mjs",
     "webp.mjs",
     "marp.mjs",
     "marp-theme.css",

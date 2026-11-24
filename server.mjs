@@ -307,12 +307,12 @@ registerTool(
       '生成AI・AI検索にサイト概要を伝える llms.txt（llmstxt.org 提案フォーマット準拠）を生成する' +
       '（tools.first-ch.com/llms-txt/ と同一ロジック）。生成テキストをサイトのルート（/llms.txt）に設置して使う。' +
       'sections はいくつでも渡せる（順に出力・"Optional" という見出しは仕様上「短い文脈では省いてよいリンク」の意味）。' +
-      '題名の [ ] \\ と改行、URL の空白・括弧・<>" は逃がして出力し、読めない URL・http(s) 以外・題名や URL の無い行・同じ URL の2つ目以降は出力から外して warnings（section・row・code・message）で知らせる。' +
+      '0.66.0 からの挙動: タイトルの [ ] \\ と改行、URL の空白（全角を含む）・括弧・<>"\\ は置き換えて出力し、javascript: などの URL・http(s) なのに読めない URL・タイトルや URL の無い行・同じ URL の2つ目以降は出力から外して warnings（section・row・code・level・dropped・message）で知らせる。相対 URL（/a・docs/a.md）・mailto: などは従来どおり出力し、注意だけ返す。notes の行頭の # と文の直後の === / --- は見出しにならないよう \\ を付ける（コードブロックの中は除く）。返り値に stats（セクション数・リンク数）と warnings を足した（text は従来どおり）。' +
       'importText に sitemap.xml の中身か URL の一覧（1行1URL・「URL<TAB>題名」・「- [題名](URL)」）を渡すと行を足す（題名が無ければパスから仮に作る。importSection の見出しへ・importByPath:true でパスの1階層目ごとに分ける）。sitemapindex を渡すと生成せず children（子の sitemap の URL）を返す。sitemap を取りに行くことはしない。' +
       'mode="lint"（または siteName なしで text を渡す）は既存の llms.txt を点検し、H1 の有無・要約の位置・本文の見出し・H2 とリンクの行の形・URL の形と重複・空のセクションなどを issues（line・level・code・message）で返す。spec は読み取った内容（generate にそのまま渡せる）。完全ローカル処理・ネットワーク送信なし。',
     inputSchema: {
       mode: z.enum(['generate', 'lint']).optional().describe('処理の種類（省略時は siteName なしで text があれば lint、それ以外は generate）'),
-      siteName: z.string().optional().describe('サイト名（H1になる・generate では必須）'),
+      siteName: z.string().optional().describe('サイト名（H1になる）。mode=generate では必須（無いとエラー）。mode=lint では使わない'),
       summary: z.string().optional().describe('サイト概要（引用ブロックになる・改行可）'),
       notes: z.string().optional().describe('補足説明（自由記述の段落。行頭の # などは見出しにならないよう逃がす）'),
       sections: z
@@ -331,9 +331,9 @@ registerTool(
         .optional()
         .describe('リンクセクション（いくつでも・順に出力される）'),
       importText: z.string().optional().describe('sitemap.xml の中身か URL の一覧。行にしてセクションへ足す（2000件まで）'),
-      importSection: z.string().optional().describe('importText の行を入れるセクションの見出し（既定は sections の最初。同じ見出しが無ければ作る）'),
+      importSection: z.string().optional().describe('importText の行を入れるセクションの見出し（既定は sections の最初。大文字・小文字を問わず同じ見出しがあればそこへ、無ければ作る。optional は Optional に揃える）'),
       importByPath: z.boolean().optional().describe('true でパスの1階層目（/blog/ など）が同じページが2件以上ある階層を別のセクションにする'),
-      text: z.string().optional().describe('mode=lint で点検する llms.txt の中身'),
+      text: z.string().optional().describe('mode=lint で点検する llms.txt の中身（siteName と一緒に渡して mode を省くと generate になり、text は使わず notice で知らせる）'),
       lang: z.enum(['ja', 'en']).optional().describe("message の言語（既定 'ja'）"),
     },
   },
