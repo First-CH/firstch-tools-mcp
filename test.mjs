@@ -5717,3 +5717,49 @@ console.log('all tests passed');
   assert.throws(() => hiddenInstructionTool({}), (e) => e instanceof HiddenInstructionError && e.code === 'NO_TEXT');
   console.log('ok hidden_instruction_scan');
 }
+
+// ==================== shift_notice_dates ====================
+{
+  const { shiftNoticeTool, ShiftNoticeError, holidayOf, holidayCount } = await import('./shift-notice.mjs');
+  assert.equal(holidayCount(), 1067);
+  assert.equal(holidayOf(2026, 9, 22).ja, '休日（国民の休日）');
+  assert.deepEqual(holidayOf(2028, 1, 1), { out: true });
+  const t = '2025年度 秋のバザー\n日時：11月8日（土）10:00〜13:00\n前日準備：11月7日（金）\n作品展：11月3日（月・祝）\nもちつき：1月11日（日）';
+  const r = shiftNoticeTool({ text: t, now: 2026 });
+  assert.equal(r.to, 2026);
+  assert.deepEqual(r.rows.map((x) => [x.candidateIso, x.rule]), [['2026-11-14', '第2土曜'], ['2026-11-06', '第1金曜'], ['2026-11-02', '第1月曜'], ['2027-01-10', '第2日曜']]);
+  assert.equal(r.rows[1].suggestedAnchor, 1);
+  assert.deepEqual(r.rows[1].warnings, ['11/8(土)の1日前だったのが、8日前になる']);
+  assert.equal(r.rows[2].holidayBefore, '文化の日');
+  assert.equal(r.text, '2026年度 秋のバザー\n日時：11月14日（土）10:00〜13:00\n前日準備：11月6日（金）\n作品展：11月2日（月）\nもちつき：1月10日（日）');
+  // follow で本番の1日前・apply で選んだ行だけ・年度は applyYears
+  const f = shiftNoticeTool({ text: t, now: 2026, rows: [{ n: 2, mode: 'follow', anchor: 1 }], apply: [1, 2], applyYears: [] });
+  assert.equal(f.rows[1].candidateIso, '2026-11-13');
+  assert.equal(f.text, '2025年度 秋のバザー\n日時：11月14日（土）10:00〜13:00\n前日準備：11月13日（金）\n作品展：11月3日（月・祝）\nもちつき：1月11日（日）');
+  assert.equal(f.counts.applied, 2);
+  assert.equal(shiftNoticeTool({ text: t, now: 2026, apply: 'none' }).text, t);
+  // 第5土曜の無い月は候補なし、last で最終土曜
+  const n5 = shiftNoticeTool({ text: '例会 2025/11/29(土)', now: 2026, lang: 'en' });
+  assert.equal(n5.rows[0].candidate, null);
+  assert.equal(n5.text, '例会 2025/11/29(土)');
+  assert.equal(shiftNoticeTool({ text: '例会 2025/11/29(土)', rows: [{ n: 1, mode: 'last' }] }).rows[0].candidateIso, '2026-11-28');
+  assert.equal(shiftNoticeTool({ text: 'Saturday, November 8, 2025', lang: 'en' }).text, 'Saturday, November 14, 2026');
+  assert.throws(() => shiftNoticeTool({}), (e) => e instanceof ShiftNoticeError && e.code === 'NO_TEXT');
+  assert.throws(() => shiftNoticeTool({ text: 'a', rows: [{ n: 1, mode: 'x' }] }), (e) => e.code === 'BAD_MODE');
+  assert.throws(() => shiftNoticeTool({ text: 'a', apply: 'some' }), (e) => e.code === 'BAD_APPLY');
+
+  // サイト側の正本（site/hizuke/lib.mjs）とコアがバイト一致するか（隣に FirstCHTools があるときだけ）
+  const { existsSync, readFileSync } = await import('node:fs');
+  const { join, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const site = [process.env.FIRSTCH_TOOLS_REPO, join(here, '..', 'FirstCHTools'), join(here, '..', 'firstchtools')]
+    .filter(Boolean).map((p) => join(p, 'site', 'hizuke', 'lib.mjs')).find((p) => existsSync(p));
+  const core = (src) => src.slice(src.indexOf('// ==================== ここからコア'), src.indexOf('// ==================== ここまでコア'));
+  if (!site) console.log('  skip - shift-notice.mjs と site/hizuke/lib.mjs の突合（FirstCHTools が見つからない）');
+  else {
+    assert.equal(core(readFileSync(join(here, 'shift-notice.mjs'), 'utf8')), core(readFileSync(site, 'utf8')), 'shift-notice.mjs のコアが site/hizuke/lib.mjs と違う');
+    console.log('  ok - shift-notice.mjs のコアは site/hizuke/lib.mjs と同一');
+  }
+  console.log('ok shift_notice_dates');
+}

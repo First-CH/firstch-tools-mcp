@@ -57,6 +57,7 @@ import { renkyuPairTool } from './renkyu-pair.mjs';
 import { kuronuriTailTool } from './kuronuri-tail.mjs';
 import { romajiNameTool } from './romaji-name.mjs';
 import { hiddenInstructionTool } from './hidden-instruction.mjs';
+import { shiftNoticeTool } from './shift-notice.mjs';
 import { replyCheckTool } from './reply-check.mjs';
 import { llmsTxtTool } from './llms-txt.mjs';
 
@@ -2319,6 +2320,42 @@ registerTool(
   async (opts) => {
     await logUsage('hidden_instruction_scan');
     return asText(hiddenInstructionTool(opts));
+  },
+);
+
+registerTool(
+  'shift_notice_dates',
+  {
+    title: '去年の案内文の日付を今年の同じ第n曜日へ移す（曜日・祝日・注意つき）',
+    description:
+      'PTA・自治会・教室などで毎年同じ行事の案内を前年の文から作り直すとき向け。前年の案内文（text）と直す先の年（to）から、文中の日付（「11月8日（土）」「11/8(土)」「2025/11/8」「2025-11-08」「Saturday, November 8, 2025」「8 Nov (Sat)」と範囲の後ろの「〜9日（日）」。年も曜日も無い 11/8 は拾わない）を抜き出し、rows に1件ずつ返す（tools.first-ch.com/hizuke/ と同一ロジック）。' +
+      '各行は prior（前年の日付）・rule（移し方）・candidate／candidateIso（今年の候補）・replacement（その部分の書き換え後の文字列）・holidayNow（候補が祝日・振替休日・国民の休日ならその名前、2028年以降は「祝日データ対象外」）・holidayBefore（前年が祝日ならその名前）・warnings（注意の文）・yearAssumed（年を仮定したか）。' +
+      '移し方の既定は nth（同じ月の同じ第n曜日。2025年11月8日の第2土曜→2026年11月14日）。rows の指定で行ごとに last（その月の最後の同じ曜日）・same（日付は変えず曜日だけ直す）・follow（anchor の行からの日数の間隔のまま）へ切り替える。to が文の年と同じなら日付は動かさず曜日の食い違いだけを直す。' +
+      '注意: 第5の曜日が無い月・2月29日の無い年（候補なし）、書いてある曜日と暦の食い違い、3日以内に並ぶ2件（本番と前日準備など）の間隔のずれ（suggestedAnchor を follow の anchor に使える）、同じ行の時刻の逆転、日付の前の和暦の年（書き換えない）、前年は祝日だった行の今年のその祝日の日付。' +
+      '年の書いていない日付は文中の年（「2025年度」など年度なら1〜3月は翌年）、無ければ去年と仮定する（base で指定できる。suggestedBase は曜日がすべて合う年）。日付の外の「2025年度」なども yearRows に候補として返す。' +
+      '祝日は内閣府「国民の祝日について」の祝日CSV（1955〜2027年・1,067日）を同梱。text は apply の行（既定は全部）だけ置き換えた文で、数字の全角・0埋め・英語の月名や曜日の綴りの長さを保ち、（土・祝）の「祝」は候補が祝日でなければ外す。' +
+      '結果はすべて要確認の候補。和暦・六曜の変換、営業日や締切の計算、日付以外の文言（会費・担当者名・会場）の書き換えはしない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      text: z.string().max(200000).describe('前年の案内文（プレーンテキスト・20万字まで）'),
+      to: z.number().int().min(1900).max(2200).optional().describe('直す先の年（省くと文の年＋1）'),
+      base: z.number().int().min(1900).max(2200).optional().describe('文の年（年の書いていない日付をこの年として読む。省くと文中の年、無ければ今年−1）'),
+      rows: z
+        .array(z.object({
+          n: z.number().int().min(1).describe('行の番号（rows[].n）'),
+          mode: z.enum(['nth', 'last', 'same', 'follow']).optional().describe('移し方'),
+          year: z.number().int().min(1900).max(2200).optional().describe('年の書いていない日付の年'),
+          anchor: z.number().int().min(1).optional().describe("mode='follow' の基準の行の番号（省くと suggestedAnchor か1つ前の行）"),
+        }))
+        .optional()
+        .describe('行ごとの切り替え'),
+      apply: z.union([z.enum(['all', 'none']), z.array(z.number().int().min(1))]).optional().describe("text で置き換える行（既定 'all'。番号の配列なら日付の外の年は applyYears で選ぶ）"),
+      applyYears: z.array(z.number().int().min(1)).optional().describe('apply が配列のとき、置き換える yearRows の番号'),
+      lang: z.enum(['ja', 'en']).optional().describe("prior・rule・candidate・warnings・note の言語（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('shift_notice_dates');
+    return asText(shiftNoticeTool(opts));
   },
 );
 
