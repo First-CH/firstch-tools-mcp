@@ -81,26 +81,9 @@ export function countChars(text) {
   };
 }
 
-// ---- llms.txt 生成（site/llms-txt/app.js と同一アルゴリズム・2箇所ルール対象） ----
-// spec: { siteName, summary?, notes?, sections?: [{ title, links: [{ title, url, note? }] }] }
-export function buildLlmsTxt(spec) {
-  const name = String(spec.siteName || '').trim();
-  if (!name) throw new Error('siteName は必須です');
-  const parts = [`# ${name}`];
-  const summary = String(spec.summary || '').trim();
-  if (summary) parts.push(summary.split(/\n+/).map((l) => `> ${l.trim()}`).join('\n'));
-  const notes = String(spec.notes || '').trim();
-  if (notes) parts.push(notes);
-  for (const sec of spec.sections || []) {
-    const title = String(sec.title || '').trim();
-    const links = (sec.links || [])
-      .map((l) => ({ title: String(l.title || '').trim(), url: String(l.url || '').trim(), note: String(l.note || '').trim() }))
-      .filter((l) => l.title && l.url)
-      .map((l) => `- [${l.title}](${l.url})${l.note ? ': ' + l.note : ''}`);
-    if (title && links.length) parts.push(`## ${title}\n\n${links.join('\n')}`);
-  }
-  return parts.join('\n\n') + '\n';
-}
+// ---- llms.txt 生成（コアは llms-txt.mjs・site/llms-txt/lib.mjs とバイト一致・2箇所ルール対象） ----
+// spec: { siteName, summary?, notes?, sections?: [{ title, links: [{ title, url, note? }] }] } → 文字列
+export { buildLlmsTxt } from './llms-txt.mjs';
 
 // ---- JSON-LD 生成（site/jsonld/app.js と同一アルゴリズム・2箇所ルール対象） ----
 // 空の項目はキーごと省略する。fields はタイプ別（下記 builders 参照）。

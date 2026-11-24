@@ -201,6 +201,34 @@ assert.equal(over.x_postable, false);
     '# First CH Tools\n\n> Web制作会社が公開する無料ブラウザツール集。\n> すべての処理はブラウザ内で完結する。\n\nAIエージェントからの利用を歓迎する。\n\n## 主要ページ\n\n- [WebP変換](https://tools.first-ch.com/webp/): 画像一括変換\n',
   );
   assert.throws(() => buildLlmsTxt({ siteName: '' }));
+
+  // llmsTxtTool: 任意個のセクション・エスケープ・重複除去・取り込み・sitemapindex・点検
+  const { llmsTxtTool } = await import('./llms-txt.mjs');
+  const g = llmsTxtTool({
+    siteName: 'Ex',
+    sections: [
+      { title: 'Docs', links: [{ title: 'A [b]', url: 'https://e.com/a (1)' }, { title: 'dup', url: 'https://E.com/a%20%281%29' }, { title: 'bad', url: 'e.com/x' }] },
+      { title: 'Optional', links: [] },
+    ],
+    importText: '<urlset><url><loc>https://e.com/blog/one/</loc></url><url><loc>https://e.com/blog/two/</loc></url><url><loc>https://e.com/about/</loc></url></urlset>',
+    importByPath: true,
+  });
+  assert.equal(g.mode, 'generate');
+  assert.match(g.text, /^- \[A \\\[b\\\]\]\(https:\/\/e\.com\/a%20%281%29\)$/m);
+  assert.deepEqual(g.text.match(/^## .*$/gm), ['## Docs', '## Blog']);
+  assert.match(g.text, /- \[About\]\(https:\/\/e\.com\/about\/\)/);
+  assert.deepEqual(g.warnings.map((w) => w.code), ['encoded', 'dupUrl', 'invalid']);
+  assert.ok(g.warnings.every((w) => w.message && !w.message.includes('{')));
+  assert.deepEqual(g.imported, { kind: 'sitemap', count: 3, guessedTitles: 3, skipped: [], truncated: 0 });
+  const idx = llmsTxtTool({ siteName: 'Ex', importText: '<sitemapindex><sitemap><loc>https://e.com/s1.xml</loc></sitemap></sitemapindex>' });
+  assert.equal(idx.text, null);
+  assert.deepEqual(idx.imported.children, ['https://e.com/s1.xml']);
+  const lint = llmsTxtTool({ text: 'intro\n# T\n\n## A\n\n- [x](https://e.com/)\n- [y](https://e.com/) z\n- nolink\n', lang: 'en' });
+  assert.equal(lint.mode, 'lint');
+  assert.equal(lint.ok, false);
+  assert.deepEqual(lint.issues.map((i) => `${i.line}:${i.code}`), ['2:h1NotFirst', '2:noSummary', '7:noteFormat', '7:dupLink', '8:itemNoLink']);
+  assert.ok(lint.issues.every((i) => i.message && !i.message.includes('{')));
+  assert.equal(llmsTxtTool({ text: '# T\n\n> s\n\n## A\n\n- [x](https://e.com/)\n' }).issues.length, 0);
 }
 
 // jsonld_generate: サイトのフォーム出力（site/jsonld/app.js）と同一形式・空項目は省略

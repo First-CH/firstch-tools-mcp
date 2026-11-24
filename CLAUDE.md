@@ -24,7 +24,7 @@ npm ci && npm test && node e2e.mjs   # 単体＋app_* のテスト（ネット�
 サイト側（`FirstCHTools` の `site/<tool>/app.js`）の実装が正本で、こちらは**追従する側**。別リポジトリなので CI は相互比較できず、レビュー時の目視と各ファイル冒頭のコメントが頼り。
 - アルゴリズムを変える変更はサイト側から始め、同じ変更をこちらに別コミットで反映する（こちらだけ先に変えない）
 - `marp-theme.css` はサイト側の `site/marp/theme-firstch.css` とバイト一致させる（`diff` で確認。`@auto-scaling`・`@size` を消さない）
-- `openapi-doc.mjs`・`lines.mjs`・`wiki-doc-lint.mjs` の「ここから〜ここまで」のコアは、サイト側の同名ツールと同一にする（照合コマンドは各ファイル冒頭）
+- `openapi-doc.mjs`・`lines.mjs`・`wiki-doc-lint.mjs`・`llms-txt.mjs` の「ここから〜ここまで」のコアは、サイト側の同名ツールと同一にする（照合コマンドは各ファイル冒頭）
 - `x-weight.mjs`（`count_chars` の `x_weight`）の「ここからウェイト計算コア〜ここまで」は、サイト側の `site/x-length/app.js` の同じ範囲と同一にする（照合の `diff` コマンドは同ファイル冒頭）。`npm test` は隣に `FirstCHTools` があるとき（または `FIRSTCH_TOOLS_REPO` で場所を指定したとき）だけ照合し、CI では飛ばすので、変えたら手元で必ず照合する
 - `vendor/jsquash-webp/` はサイト側と同じ `@jsquash/webp` の版を別々に固定している。片方だけ上げない
 

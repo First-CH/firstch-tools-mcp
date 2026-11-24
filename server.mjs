@@ -10,7 +10,7 @@ import { availablePrompts } from './prompts.mjs';
 import { appendFile } from 'node:fs/promises';
 import { writeOutput } from './fs-safe.mjs';
 import { createRequire } from 'node:module';
-import { contrastCheck, countChars, buildLlmsTxt, buildJsonLd, analyzeEncoding, convertEncoding } from './lib.mjs';
+import { contrastCheck, countChars, buildJsonLd, analyzeEncoding, convertEncoding } from './lib.mjs';
 import { generateTestData, FIELDS, DEFAULT_FIELDS, PRESETS } from './testdata.mjs';
 import { convertToWebp } from './webp.mjs';
 import { renderMarp } from './marp.mjs';
@@ -58,6 +58,7 @@ import { kuronuriTailTool } from './kuronuri-tail.mjs';
 import { romajiNameTool } from './romaji-name.mjs';
 import { hiddenInstructionTool } from './hidden-instruction.mjs';
 import { replyCheckTool } from './reply-check.mjs';
+import { llmsTxtTool } from './llms-txt.mjs';
 
 const { version } = createRequire(import.meta.url)('./package.json');
 // SDK v2 の serveStdio は接続ごとに factory から McpServer を1つ作る（旧仕様の initialize と
@@ -301,34 +302,44 @@ registerTool(
 registerTool(
   'llmstxt_generate',
   {
-    title: 'llms.txt 生成',
+    title: 'llms.txt 生成・点検',
     description:
       '生成AI・AI検索にサイト概要を伝える llms.txt（llmstxt.org 提案フォーマット準拠）を生成する' +
-      '（tools.first-ch.com/llms-txt/ と同一ロジック）。生成テキストをサイトのルート（/llms.txt）に設置して使う。',
+      '（tools.first-ch.com/llms-txt/ と同一ロジック）。生成テキストをサイトのルート（/llms.txt）に設置して使う。' +
+      'sections はいくつでも渡せる（順に出力・"Optional" という見出しは仕様上「短い文脈では省いてよいリンク」の意味）。' +
+      '題名の [ ] \\ と改行、URL の空白・括弧・<>" は逃がして出力し、読めない URL・http(s) 以外・題名や URL の無い行・同じ URL の2つ目以降は出力から外して warnings（section・row・code・message）で知らせる。' +
+      'importText に sitemap.xml の中身か URL の一覧（1行1URL・「URL<TAB>題名」・「- [題名](URL)」）を渡すと行を足す（題名が無ければパスから仮に作る。importSection の見出しへ・importByPath:true でパスの1階層目ごとに分ける）。sitemapindex を渡すと生成せず children（子の sitemap の URL）を返す。sitemap を取りに行くことはしない。' +
+      'mode="lint"（または siteName なしで text を渡す）は既存の llms.txt を点検し、H1 の有無・要約の位置・本文の見出し・H2 とリンクの行の形・URL の形と重複・空のセクションなどを issues（line・level・code・message）で返す。spec は読み取った内容（generate にそのまま渡せる）。完全ローカル処理・ネットワーク送信なし。',
     inputSchema: {
-      siteName: z.string().describe('サイト名（H1になる）'),
+      mode: z.enum(['generate', 'lint']).optional().describe('処理の種類（省略時は siteName なしで text があれば lint、それ以外は generate）'),
+      siteName: z.string().optional().describe('サイト名（H1になる・generate では必須）'),
       summary: z.string().optional().describe('サイト概要（引用ブロックになる・改行可）'),
-      notes: z.string().optional().describe('補足説明（自由記述の段落）'),
+      notes: z.string().optional().describe('補足説明（自由記述の段落。行頭の # などは見出しにならないよう逃がす）'),
       sections: z
         .array(
           z.object({
-            title: z.string().describe('セクション見出し（例: Main Pages / Optional）'),
+            title: z.string().describe('セクション見出し（例: Docs / Blog / Optional）'),
             links: z.array(
               z.object({
                 title: z.string().describe('ページタイトル'),
-                url: z.string().describe('ページURL'),
+                url: z.string().describe('ページURL（https:// から推奨）'),
                 note: z.string().optional().describe('1行説明'),
               }),
             ),
           }),
         )
         .optional()
-        .describe('リンクセクション（順に出力される）'),
+        .describe('リンクセクション（いくつでも・順に出力される）'),
+      importText: z.string().optional().describe('sitemap.xml の中身か URL の一覧。行にしてセクションへ足す（2000件まで）'),
+      importSection: z.string().optional().describe('importText の行を入れるセクションの見出し（既定は sections の最初。同じ見出しが無ければ作る）'),
+      importByPath: z.boolean().optional().describe('true でパスの1階層目（/blog/ など）が同じページが2件以上ある階層を別のセクションにする'),
+      text: z.string().optional().describe('mode=lint で点検する llms.txt の中身'),
+      lang: z.enum(['ja', 'en']).optional().describe("message の言語（既定 'ja'）"),
     },
   },
-  async (spec) => {
+  async (opts) => {
     await logUsage('llmstxt_generate');
-    return asText({ text: buildLlmsTxt(spec) });
+    return asText(llmsTxtTool(opts));
   },
 );
 
