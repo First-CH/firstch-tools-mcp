@@ -245,11 +245,14 @@ export function findDates(text) {
     toks.push(t);
   }
   // 日付の外に書いてある年（2025年度・FY2025）
+  // 日付に重なる年は除く。日付は位置の順に重ならず並び、年も前から順に見つかるので、終わりが s より後の最初の日付だけと比べる
   const years = [];
   YEAR_MENTION.lastIndex = 0;
+  let ti = 0;
   for (let m; (m = YEAR_MENTION.exec(src));) {
     const s = m.index, e = m.index + m[0].length;
-    if (toks.some((t) => s < t.end && e > t.start)) continue;
+    while (ti < toks.length && toks[ti].end <= s) ti++;
+    if (ti < toks.length && toks[ti].start < e) continue;
     years.push({ start: s, end: e, raw: m[0], y: toInt(m.groups.y || m.groups.y2 || m.groups.y3), fiscal: !!(m.groups.fy || m.groups.fy2), line: lineOf(s) });
   }
   return { tokens: toks, years, lines: src.split('\n') };
@@ -284,7 +287,6 @@ export function timeReversals(line) {
 export const MODES = ['nth', 'last', 'same', 'follow'];
 export const GAP_DAYS = 3;
 export { diffDays };
-const sameDay = (a, b) => a && b && a.y === b.y && a.m === b.m && a.d === b.d;
 
 // 年が書かれていない日付の年: 文中の年度なら1〜3月は翌年、そうでなければ直前の日付の年（月が6以上戻れば翌年）、
 // 直前が無ければ文の年。範囲の後ろの日（〜9日）は前の日の年と月（日が戻れば翌月）
@@ -352,12 +354,38 @@ export function analyze(text, opts = {}) {
   }
 
   // 間隔が変わる組（前日準備と本番のように GAP_DAYS 日以内の2件）の基準（同じ日付が多く出る方・土日の方・先に出る方）
-  const weight = (r) => rows.filter((x) => x.priorOk && sameDay(x.prior, r.prior)).length * 10 + (r.pw === 0 || r.pw === 6 ? 5 : 0);
+  // 全行×全行で比べると日付が2000件で2分かかったので（2026-11-27）、同じ日付の行数は日付ごとに一度だけ数え、
+  // 相手は日付ごとの代表（続きの日でない最初の行）を、日付順に並べた GAP_DAYS 日の窓の中だけ見る。
+  // 同じ日付の2行目以降は代表より良くならず、窓の外は dd > GAP_DAYS で外れるので、選ばれる基準は全件で比べたときと同じ。
+  // 通し日数が NaN になる日付（暦の範囲の外）は差の日数も NaN で窓に入らないため、全件で比べたときと同じく常に相手に含める
+  const days = new Map(), dayOf = [];
+  for (const r of rows) {
+    if (!r.priorOk) continue;
+    const key = `${r.prior.y}-${r.prior.m}-${r.prior.d}`;
+    let g = days.get(key);
+    if (!g) days.set(key, (g = { n: 0, rep: null, t: utc(r.prior.y, r.prior.m, r.prior.d) / 86400000 }));
+    g.n++;
+    if (!g.rep && r.tok.kind !== 'cont') g.rep = r;
+    dayOf[r.i] = g;
+  }
+  const weight = (r) => dayOf[r.i].n * 10 + (r.pw === 0 || r.pw === 6 ? 5 : 0);
+  const reps = [...days.values()].filter((g) => g.rep);
+  const near = reps.filter((g) => Number.isFinite(g.t)).sort((a, b) => a.t - b.t);
+  const far = reps.filter((g) => !Number.isFinite(g.t)).map((g) => g.rep);
   for (const r of rows) {
     if (!r.priorOk) continue;
     if (r.tok.kind === 'cont') { r.suggestAnchor = r.i - 1; continue; }
+    const t = dayOf[r.i].t;
+    let xs;
+    if (Number.isFinite(t)) {
+      let lo = 0, hi = near.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (near[mid].t < t - GAP_DAYS) lo = mid + 1; else hi = mid; }
+      xs = [...far];
+      for (let j = lo; j < near.length && near[j].t <= t + GAP_DAYS; j++) xs.push(near[j].rep);
+    } else xs = reps.map((g) => g.rep);
+    xs.sort((a, b) => a.i - b.i);   // 全件で比べたときと同じ順（同点は先に出る方）
     let best = null;
-    for (const x of rows) {
+    for (const x of xs) {
       if (x === r || !x.priorOk || x.tok.kind === 'cont') continue;
       const dd = Math.abs(diffDays(r.prior, x.prior));
       if (dd === 0 || dd > GAP_DAYS) continue;
