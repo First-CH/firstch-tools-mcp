@@ -20,7 +20,7 @@ export const TOOLSETS = {
   ],
   ja: [
     'count_chars', 'zenkaku_convert', 'wareki_convert', 'date_calc', 'fit_to_box', 'invoice_nebiki_check',
-    'reply_check', 'email_read_aloud', 'renkyu_pair_plan', 'romaji_name_check', 'shift_notice_dates',
+    'reply_check', 'email_read_aloud', 'renkyu_pair_plan', 'romaji_name_check', 'shift_notice_dates', 'make_rota',
   ],
   image: ['webp_convert', 'comfy_png_leak_scan', 'kuronuri_tail', 'dpi_calc'],
   doc: [

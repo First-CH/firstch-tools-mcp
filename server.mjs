@@ -58,6 +58,7 @@ import { kuronuriTailTool } from './kuronuri-tail.mjs';
 import { romajiNameTool } from './romaji-name.mjs';
 import { hiddenInstructionTool } from './hidden-instruction.mjs';
 import { shiftNoticeTool } from './shift-notice.mjs';
+import { makeRotaTool } from './make-rota.mjs';
 import { replyCheckTool } from './reply-check.mjs';
 import { llmsTxtTool } from './llms-txt.mjs';
 
@@ -2356,6 +2357,47 @@ registerTool(
   async (opts) => {
     await logUsage('shift_notice_dates');
     return asText(shiftNoticeTool(opts));
+  },
+);
+
+registerTool(
+  'make_rota',
+  {
+    title: '番号で回す当番表を作り、交代後の版の差分・共有リンク・.ics を返す（行けない曜日を守り回数差1以内）',
+    description:
+      'PTA の旗振り・町内会のごみ当番など、番号で回す当番表を作って交代のたびに配り直す幹事向け（tools.first-ch.com/toban/ と同一ロジック）。' +
+      '新しい表: start・end（2026-12-01 の形・366日まで）・weekdays（0=日〜6=土・既定は月〜金）・per_day（1回の人数・既定1）・members（番号の数 2〜99）と、任意で unavailable（{"3":[3]} のように番号ごとの行けない曜日）・exclude（除外日。"12/24, 12/28-1/7" や ISO の配列）・title（リンクに入る題・氏名は入れない）を渡す。' +
+      '行けない曜日を破らないことを絶対条件にし、埋まる枠を最大にしたうえで、全員の回数差を1以内にできる表があれば必ずそれを返す（枠と番号を流量の問題として解く。回数が同じなら番号の小さい方が先・同じ番号が続かない並びを優先）。祝日は内閣府「国民の祝日について」の祝日CSV（1955〜2027年）で除き、2028年以降の日は holidayUnchecked で返す。' +
+      'status は ok（配れる）・skewed（回数差2以上。人が確かめてから配る）・blocked（空き枠か行けない曜日の違反・同じ日の重なり。配れない）。rota は日ごとの番号、counts は番号ごとの回数、shareUrl は配るリンク（# 以降に番号と日付と変わった枠だけ。氏名・行けない曜日は入れない）。' +
+      '交代: 前に配ったリンクを base_link、交代を swaps（[{date, from, to}]。1回1人なら from は省ける。to=0 で空き）で渡すと表は作り直さずに版を上げ、changes（日付・前の番号・新しい番号）・perMember（番号ごとの added・removed の日）・新しい shareUrl を返す。unavailable を一緒に渡すと違反も点検する。' +
+      'member を渡すと、その番号の ics（初版は全部の当番日・改訂版は追加された日だけの .ics の本文と fileName、消す日 removeDates）を返す。予定名とファイル名に版番号が入る。' +
+      'カレンダーの自動同期・予定の自動削除・通知・交代相手の候補出し・氏名の保存はしない。完全ローカル処理・ネットワーク送信なし。',
+    inputSchema: {
+      start: z.string().max(20).optional().describe('最初の日（YYYY-MM-DD）。base_link が無いときに必須'),
+      end: z.string().max(20).optional().describe('最後の日（YYYY-MM-DD・start から366日まで）'),
+      weekdays: z.array(z.number().int().min(0).max(6)).max(7).optional().describe('当番の曜日（0=日〜6=土。既定 [1,2,3,4,5]）'),
+      per_day: z.number().int().min(1).max(5).optional().describe('1回の人数（既定1）'),
+      members: z.number().int().min(2).max(99).optional().describe('番号の数（1〜members の番号で回す）'),
+      unavailable: z.record(z.string(), z.array(z.number().int().min(0).max(6)).max(7)).optional().describe('番号ごとの行けない曜日（例 {"3":[3],"5":[1,5]}）'),
+      exclude: z.union([z.string().max(2000), z.array(z.string().max(30)).max(400)]).optional().describe('除外日（"12/24, 12/28-1/7" か日付の配列）'),
+      title: z.string().max(30).optional().describe('表の題（リンクに入る。氏名は入れない）'),
+      base_link: z.string().max(20000).optional().describe('前に配った共有リンク（または # 以降）。渡すと表は作り直さない'),
+      swaps: z.array(z.object({
+        date: z.string().max(20).describe('交代する日（YYYY-MM-DD）'),
+        from: z.number().int().min(0).max(99).optional().describe('その日の前の番号（1回2人以上なら必須）'),
+        to: z.number().int().min(0).max(99).describe('新しい番号（0 で空き）'),
+      })).max(400).optional().describe('交代（base_link と一緒に使う）'),
+      member: z.number().int().min(1).max(99).optional().describe('この番号の .ics を返す'),
+      lang: z.enum(['ja', 'en']).optional().describe("曜日・祝日名・注意の言語と shareUrl のページ（既定 'ja'）"),
+    },
+  },
+  async (opts) => {
+    await logUsage('make_rota');
+    return asText(makeRotaTool({
+      start: opts.start, end: opts.end, weekdays: opts.weekdays, perDay: opts.per_day, members: opts.members,
+      unavailable: opts.unavailable, exclude: opts.exclude, title: opts.title, baseLink: opts.base_link,
+      swaps: opts.swaps, member: opts.member, lang: opts.lang,
+    }));
   },
 );
 

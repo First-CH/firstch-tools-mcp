@@ -5763,3 +5763,72 @@ console.log('all tests passed');
   }
   console.log('ok shift_notice_dates');
 }
+
+// ==================== make_rota ====================
+{
+  const { makeRotaTool, MakeRotaError, solveRota, checkRota, buildDates, decodeShare } = await import('./make-rota.mjs');
+  // 2026年12月の月〜金（23日・祝日なし）×2人を20番で: 回数は2〜3回、多いのは1〜6番
+  const r = makeRotaTool({ start: '2026-12-01', end: '2026-12-31', perDay: 2, members: 20, title: '旗振り当番', id: 'ab12cd' });
+  assert.equal(r.status, 'ok');
+  assert.equal(r.version, 1);
+  assert.equal(r.rota.length, 23);
+  assert.deepEqual(r.rota.slice(0, 3).map((x) => x.members), [[1, 2], [3, 4], [5, 6]]);
+  assert.deepEqual(Object.values(r.counts), [3, 3, 3, 3, 3, 3, ...Array(14).fill(2)]);
+  assert.match(r.shareUrl, /^https:\/\/tools\.first-ch\.com\/toban\/#t=/);
+  // 交代: 12/3 の 6番 → 12番で第2版、12番は追加・6番は削除、.ics は追加の日だけ
+  const r2 = makeRotaTool({ baseLink: r.shareUrl, swaps: [{ date: '2026-12-03', from: 6, to: 12 }], member: 12, now: new Date(Date.UTC(2026, 10, 28)) });
+  assert.equal(r2.version, 2);
+  assert.equal(r2.status, 'ok');
+  assert.deepEqual(r2.changes, [{ date: '2026-12-03', from: 6, to: 12 }]);
+  assert.deepEqual(r2.perMember, { 6: { added: [], removed: ['2026-12-03'] }, 12: { added: ['2026-12-03'], removed: [] } });
+  assert.equal(r2.ics.fileName, 'toban-no12-v2-added.ics');
+  assert.match(r2.ics.content, /SUMMARY:旗振り当番（12番・第2版）/);
+  assert.equal((r2.ics.content.match(/BEGIN:VEVENT/g) || []).length, 1);
+  assert.deepEqual(decodeShare(r2.shareUrl.split('#')[1]).changes, [{ iso: '2026-12-03', from: 6, to: 12 }]);
+  // 同じ版をもう一度渡しても版は上がらず、変わった枠は前のまま
+  const r3 = makeRotaTool({ baseLink: r2.shareUrl });
+  assert.equal(r3.version, 2);
+  assert.deepEqual(r3.changes, r2.changes);
+  // 偏り・空き・違反
+  assert.equal(makeRotaTool({ baseLink: r.shareUrl, swaps: [{ date: '2026-12-04', from: 7, to: 20 }] }).status, 'skewed', '7番 2→1回・20番 2→3回');
+  const bad = makeRotaTool({ baseLink: r.shareUrl, unavailable: { 12: [4] }, swaps: [{ date: '2026-12-03', from: 6, to: 12 }] });
+  assert.equal(bad.status, 'blocked');
+  assert.deepEqual(bad.violations, [{ date: '2026-12-03', member: 12, kind: 'weekday' }]);
+  const empty = makeRotaTool({ start: '2026-12-01', end: '2026-12-31', perDay: 2, members: 3, unavailable: { 1: [1], 2: [1] } });
+  assert.equal(empty.status, 'blocked');
+  assert.equal(empty.empty.length, 4);
+  // 祝日と未確認
+  const jan = makeRotaTool({ start: '2027-01-01', end: '2027-01-31', members: 5, lang: 'en' });
+  assert.deepEqual(jan.holidaysSkipped.map((h) => h.date), ['2027-01-01', '2027-01-11']);
+  const y28 = makeRotaTool({ start: '2027-12-27', end: '2028-01-07', members: 4 });
+  assert.equal(y28.holidayUncheckedDates.length, 5);
+  assert.equal(y28.rota.filter((x) => x.holidayUnchecked).length, 5);
+  // 行けない曜日を破らず差が1以内（日付順の決め打ちでは偏る形）
+  const { dates } = buildDates({ start: '2026-12-01', end: '2026-12-31', weekdays: [1, 2, 3, 4, 5] });
+  const un = { 1: [1, 2, 3, 4], 2: [1, 2, 3, 4], 3: [5], 4: [5], 5: [5] };
+  const c = checkRota({ dates, slots: solveRota({ dates, perDay: 2, members: 12, unavailable: un }).slots, members: 12, unavailable: un });
+  assert.equal(c.ok, true);
+  // エラー
+  assert.throws(() => makeRotaTool({ start: '2026-12-01', end: '2026-12-31' }), (e) => e instanceof MakeRotaError && e.code === 'BAD_MEMBERS');
+  assert.throws(() => makeRotaTool({ start: '2026-12-01', end: '2026-12-31', members: 5, swaps: [{ date: '2026-12-01', to: 1 }] }), (e) => e.code === 'SWAPS_NEED_BASE');
+  assert.throws(() => makeRotaTool({ baseLink: 'https://tools.first-ch.com/toban/#a=zz' }), (e) => e.code === 'BAD_LINK');
+  assert.throws(() => makeRotaTool({ baseLink: r.shareUrl, swaps: [{ date: '2026-12-03', to: 1 }] }), (e) => e.code === 'BAD_SWAP');
+  assert.throws(() => makeRotaTool({ baseLink: r.shareUrl, swaps: [{ date: '2026-12-05', from: 1, to: 2 }] }), (e) => e.code === 'BAD_SWAP');
+  assert.throws(() => makeRotaTool({ start: '2026-12-01', end: '2026-12-31', members: 5, exclude: 'abc' }), (e) => e.code === 'BAD_EXCLUDE');
+  assert.throws(() => makeRotaTool({ start: '2026-12-01', end: '2026-12-31', members: 5, unavailable: { 9: [1] } }), (e) => e.code === 'BAD_MEMBER');
+
+  // サイト側の正本（site/toban/lib.mjs）とコアがバイト一致するか（隣に FirstCHTools があるときだけ）
+  const { existsSync, readFileSync } = await import('node:fs');
+  const { join, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const site = [process.env.FIRSTCH_TOOLS_REPO, join(here, '..', 'FirstCHTools'), join(here, '..', 'firstchtools')]
+    .filter(Boolean).map((p) => join(p, 'site', 'toban', 'lib.mjs')).find((p) => existsSync(p));
+  const core = (src) => src.slice(src.indexOf('// ==================== ここからコア'), src.indexOf('// ==================== ここまでコア'));
+  if (!site) console.log('  skip - make-rota.mjs と site/toban/lib.mjs の突合（FirstCHTools が見つからない）');
+  else {
+    assert.equal(core(readFileSync(join(here, 'make-rota.mjs'), 'utf8')), core(readFileSync(site, 'utf8')), 'make-rota.mjs のコアが site/toban/lib.mjs と違う');
+    console.log('  ok - make-rota.mjs のコアは site/toban/lib.mjs と同一');
+  }
+  console.log('ok make_rota');
+}

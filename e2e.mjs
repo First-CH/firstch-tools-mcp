@@ -114,6 +114,7 @@ try {
     'jsonld_generate',
     'jwt_decode',
     'lines_process',
+    'make_rota',
     'llmstxt_generate',
     'markdown_table',
     'marp_render',
@@ -1010,6 +1011,17 @@ try {
   assert.equal(sn.text, '日時：2026年11月14日（土）\n準備：11月6日（金）');
   const snErr = await request('tools/call', { name: 'shift_notice_dates', arguments: { text: 'a', rows: [{ n: 1, mode: 'x' }] } }, 2002);
   assert.ok(snErr.result?.isError || snErr.error, `shift_notice_dates should reject mode x: ${JSON.stringify(snErr)}`);
+
+  // make_rota: 2026年12月の月〜金×2人を20番で作り、12/3 の6番→12番で第2版・12番の .ics は追加の日だけ
+  const mr = await callTool('make_rota', { start: '2026-12-01', end: '2026-12-31', per_day: 2, members: 20 }, 2011);
+  assert.equal(mr.status, 'ok', `make_rota: ${JSON.stringify(mr).slice(0, 300)}`);
+  assert.equal(mr.rota.length, 23);
+  const mr2 = await callTool('make_rota', { base_link: mr.shareUrl, swaps: [{ date: '2026-12-03', from: 6, to: 12 }], member: 12 }, 2012);
+  assert.equal(mr2.version, 2);
+  assert.deepEqual(mr2.changes, [{ date: '2026-12-03', from: 6, to: 12 }]);
+  assert.deepEqual(mr2.ics.dates, ['2026-12-03']);
+  const mrErr = await request('tools/call', { name: 'make_rota', arguments: { start: '2026-12-01', end: '2026-12-31', members: 1 } }, 2013);
+  assert.ok(mrErr.result?.isError || mrErr.error, `make_rota should reject members 1: ${JSON.stringify(mrErr)}`);
 
   // app_*: 偽の API へ POST し、応答の JSON をそのまま返す・API のエラーは isError になる
   const appMeta = await callTool('app_meta_check', { url: 'https://example.com/' }, 200);
