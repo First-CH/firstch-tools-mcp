@@ -573,6 +573,15 @@ const DEFS = [
       '推測で埋めず、ページの良し悪しは判定しない。形式は授業・先生の指定が優先。ページの本文は返さない。同じIPから1分に10回まで（超えると HTTP 429）。',
     { urlLabel: '引用したいWebページのURL' },
   ),
+  urlApp(
+    'furui-js',
+    '/furui-js/api/check',
+    'URLを入れると、HPの古い部品と制作会社への依頼文が出る',
+    'URLのページを1回だけ取得し、script[src] から jQuery・jQuery UI・Bootstrap・Lodash・Moment.js・AngularJS・Vue.js・Swiper の8種類を探して版を確定する（ファイル名 → CDN のパス → ?ver=〈WordPress 本体・テーマの版と同じ値、プラグイン・テーマの中の部品は使わない〉→ ファイル先頭2KBのコメント〈最大8本〉）。' +
+      '版が確定した部品ごとに OSV（api.osv.dev）へ部品名と版だけを1回照会し、判定（action＝要対応：修正版のある既知の記録あり／watch＝様子見：版不明・照会できない・修正版の無い記録だけ／ok＝問題なし／none＝8種類が1つも見つからない。問題なしとは言わない）と、部品ごとの版・検出根拠・記録のID（osv.dev のリンク）・上げる先の版（該当した記録の修正版の最大値）・メジャー版をまたぐか（majorJump）を返す。' +
+      '制作会社への依頼文（request）と、URLを入れない共有の1行（share）も返す。確定できない版は「版不明」として判定しない。攻撃の再現・総合点数・巡回はしない。ページの本文は返さない。同じIPから1分に5回まで（超えると HTTP 429）。',
+    { urlLabel: '調べる自社HPのページのURL（そのページ1枚だけを調べる）', sends: '入力したURL（OSV へは部品名と版だけ）' },
+  ),
 ];
 
 const toolName = (slug) => `app_${slug.replace(/-/g, '_')}`;

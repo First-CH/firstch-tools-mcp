@@ -182,7 +182,10 @@ const RX = [
   { kind: 'cont', re: new RegExp(`(?<=[〜~～\\-−–—ー・、,，と]\\s{0,2})(?<d>${D}{1,2})(?:\\s*日)?${WJ_PART}`, 'dgu') },
 ];
 const ERA_BEFORE = /(?:令和|平成|昭和|R|H)\s*(?:[0-9０-９]{1,2}|元)\s*年\s*$/;
-const YEAR_MENTION = new RegExp(`(?<![0-9０-９])(?<y>${D}{4})\\s*年(?<fy>度)?|\\b(?<fy2>FY\\s?|fiscal\\s+year\\s+|school\\s+year\\s+)(?<y2>\\d{4})\\b|(?<![0-9０-９\\-/.:])(?<y3>(?:19|20)\\d{2})(?![0-9０-９\\-/.:年])`, 'dgiu');
+// 年の字の無い 2025 は、金額・人数など単位の付いた数（2000円・¥2000・2025名・2000 people）を除く
+const NOT_YEAR_PRE = '[0-9０-９\\-/.:¥￥$＄€£]|[0-9],';
+const NOT_YEAR_POST = `[0-9０-９\\-/.:年a-z]|,[0-9]|\\s*[円名人個件回枚本冊点社台歳組席部杯号番位%％]|\\s+(?:yen|jpy|usd|dollars?|euros?|people|persons?|guests?|members?|participants?|attendees|students?|visitors?|seats?|copies|items?|pieces?|points?|pts|times|units?|pages?|words|characters|steps|kcal|km|kg|mm|cm|ml)\\b`;
+const YEAR_MENTION = new RegExp(`(?<![0-9０-９])(?<y>${D}{4})\\s*年(?<fy>度)?|\\b(?<fy2>FY\\s?|fiscal\\s+year\\s+|school\\s+year\\s+)(?<y2>\\d{4})\\b|(?<!${NOT_YEAR_PRE})(?<y3>(?:19|20)\\d{2})(?!${NOT_YEAR_POST})`, 'dgiu');
 
 const toInt = (s) => parseInt(String(s).replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)), 10);
 const monthOfName = (s) => { const k = s.slice(0, 3).toLowerCase(); return ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(k) + 1; };
@@ -211,6 +214,8 @@ export function findDates(text) {
       // 年も曜日も無い 11/8・2025.11 などは日付と言い切れない
       if (kind === 'num' && tok.y == null && tok.w == null) continue;
       if (kind === 'cont' && tok.w == null) continue;
+      // 小文字の may は助動詞（Each family may 2 guests）。月の May は大文字で始める
+      if ((kind === 'en-md' || kind === 'en-dm') && /^may$/i.test(tok.ms.raw) && tok.ms.raw[0] === 'm') continue;
       found.push(tok);
     }
   }
